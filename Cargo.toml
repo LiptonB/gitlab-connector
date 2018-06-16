@@ -6,3 +6,4 @@ authors = ["Ben Lipton <ben@grimm-co.com>"]
 [dependencies]
 hyper = "0.12"
 futures = "0.1"
+serde_json = "1.0"

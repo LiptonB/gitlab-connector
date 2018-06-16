@@ -1,8 +1,9 @@
 extern crate hyper;
 extern crate futures;
+extern crate serde_json;
 
 use futures::{future, Stream};
-use hyper::{Method, StatusCode};
+use hyper::{Method, StatusCode, Chunk};
 use hyper::{Body, Request, Response, Server};
 use hyper::rt::Future;
 use hyper::service::service_fn;
@@ -10,9 +11,30 @@ use hyper::service::service_fn;
 // Just a simple type alias
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
-fn echo(req: Request<Body>) -> BoxFut {
+fn execute_webhook(json: Chunk) {
+
+}
+
+fn webhook(req: Request<Body>) -> BoxFut {
     let mut response = Response::new(Body::empty());
 
+    match req.method() {
+        &Method::POST => {
+           let future = req
+               .into_body() 
+               .concat2()
+               .map(move |json| {
+                    execute_webhook(json);
+                    response
+               });
+           return Box::new(future);
+        },
+        _ => {
+            *response.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
+        },
+    };
+
+    /*
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") => {
             *response.body_mut() = Body::from("Try POSTing data to /echo");
@@ -51,6 +73,7 @@ fn echo(req: Request<Body>) -> BoxFut {
             *response.status_mut() = StatusCode::NOT_FOUND;
         },
     };
+    */
 
     Box::new(future::ok(response))
 }
@@ -63,7 +86,7 @@ fn main() {
     // creates on of our `hello_world` function.
     let new_svc = || {
         // service_fn_ok converts our function into a `Service`
-        service_fn(echo)
+        service_fn(webhook)
     };
 
     let server = Server::bind(&addr)
