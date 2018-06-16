@@ -1,3 +1,75 @@
+extern crate hyper;
+extern crate futures;
+
+use futures::{future, Stream};
+use hyper::{Method, StatusCode};
+use hyper::{Body, Request, Response, Server};
+use hyper::rt::Future;
+use hyper::service::service_fn;
+
+// Just a simple type alias
+type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
+
+fn echo(req: Request<Body>) -> BoxFut {
+    let mut response = Response::new(Body::empty());
+
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") => {
+            *response.body_mut() = Body::from("Try POSTing data to /echo");
+        },
+        (&Method::POST, "/echo") => {
+            *response.body_mut() = req.into_body();
+        },
+        (&Method::POST, "/echo/uppercase") => {
+            // This is actually a new `futures::Stream`...
+            let mapping = req
+                .into_body()
+                .map(|chunk| {
+                    chunk.iter()
+                        .map(|byte| byte.to_ascii_uppercase())
+                        .collect::<Vec<u8>>()
+                });
+
+            // Use `Body::wrap_stream` to convert it to a `Body`...
+            *response.body_mut() = Body::wrap_stream(mapping);
+        },
+        (&Method::POST, "/echo/reversed") => {
+            let reversed = req
+                .into_body()
+                .concat2()
+                .map(|chunk| {
+                    let body = chunk.iter()
+                        .rev()
+                        .cloned()
+                        .collect::<Vec<u8>>();
+                    *response.body_mut() = Body::from(body);
+                    response
+                });
+            return Box::new(reversed);
+        },
+        _ => {
+            *response.status_mut() = StatusCode::NOT_FOUND;
+        },
+    };
+
+    Box::new(future::ok(response))
+}
+
 fn main() {
-    println!("Hello, world!");
+    // This is our socket address...
+    let addr = ([127, 0, 0, 1], 3000).into();
+
+    // A `Service` is needed for every connection, so this
+    // creates on of our `hello_world` function.
+    let new_svc = || {
+        // service_fn_ok converts our function into a `Service`
+        service_fn(echo)
+    };
+
+    let server = Server::bind(&addr)
+        .serve(new_svc)
+        .map_err(|e| eprintln!("server error: {}", e));
+
+    // Run this server for... forever!
+    hyper::rt::run(server);
 }
