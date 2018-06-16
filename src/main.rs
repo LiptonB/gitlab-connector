@@ -3,8 +3,7 @@ extern crate futures;
 extern crate serde_json;
 
 use futures::{future, Stream};
-use hyper::{Method, StatusCode, Chunk};
-use hyper::{Body, Request, Response, Server};
+use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
 use hyper::rt::Future;
 use hyper::service::service_fn;
 
