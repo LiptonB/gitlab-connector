@@ -1,0 +1,6 @@
+[package]
+name = "gitlab_connector"
+version = "0.1.0"
+authors = ["Ben Lipton <ben@grimm-co.com>"]
+
+[dependencies]
