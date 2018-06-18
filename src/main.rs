@@ -6,12 +6,18 @@ use futures::{future, Stream};
 use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
 use hyper::rt::Future;
 use hyper::service::service_fn;
+use serde_json::Value;
 
 // Just a simple type alias
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
-fn execute_webhook(json: Chunk) {
-
+fn execute_webhook(json: &Chunk) {
+    if let Ok(data) = serde_json::from_slice::<Value>(json) {
+        let kind = &data["object_kind"];
+        if let Some("merge_request") = kind.as_str() {
+            println!("Was a merge request");
+        }
+    }
 }
 
 fn webhook(req: Request<Body>) -> BoxFut {
@@ -23,7 +29,7 @@ fn webhook(req: Request<Body>) -> BoxFut {
                .into_body() 
                .concat2()
                .map(move |json| {
-                    execute_webhook(json);
+                    execute_webhook(&json);
                     response
                });
            return Box::new(future);
