@@ -20,8 +20,8 @@ fn execute_webhook(json: &Chunk) {
         let kind = &data["object_kind"];
         if let Some("merge_request") = kind.as_str() {
             println!("Was a merge request");
-            if let Value::String(ref_id) = data["object_attributes"]["last_commit"]["id"] {
-                call_ci(&ref_id);
+            if let Value::String(ref_id) = &data["object_attributes"]["last_commit"]["id"] {
+                call_ci(ref_id);
             }
         }
     }
