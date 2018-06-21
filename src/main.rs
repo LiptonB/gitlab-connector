@@ -11,11 +11,16 @@ use serde_json::Value;
 // Just a simple type alias
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
+fn call_ci(ref_id: &str) {
+    // trigger = "/projects/:id/trigger/pipeline"
+}
+
 fn execute_webhook(json: &Chunk) {
     if let Ok(data) = serde_json::from_slice::<Value>(json) {
         let kind = &data["object_kind"];
         if let Some("merge_request") = kind.as_str() {
             println!("Was a merge request");
+            call_ci(&data["object_attributes"]["last_commit"]["id"]);
         }
     }
 }
@@ -26,7 +31,7 @@ fn webhook(req: Request<Body>) -> BoxFut {
     match req.method() {
         &Method::POST => {
            let future = req
-               .into_body() 
+               .into_body()
                .concat2()
                .map(move |json| {
                     execute_webhook(&json);
