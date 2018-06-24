@@ -11,6 +11,65 @@ use serde_json::Value;
 // Just a simple type alias
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
+struct CIJob {
+
+}
+
+struct BranchHead {
+    commit: String,
+    branch: String,
+}
+
+struct Config {
+
+}
+
+struct WebHookListener {
+    config: Config,
+}
+
+impl CIJob {
+    fn create(branch: &str, conf: &Config) -> CIJob {
+        CIJob{}
+    }
+
+    fn ensure_running(&self) {
+
+    }
+
+    fn update_statuses(&self) {
+
+    }
+}
+
+impl BranchHead {
+
+}
+
+impl WebHookListener {
+    fn handle_mr_hook(&self) {
+        let branch = "";
+        let job = CIJob::create(branch, &self.config);
+        job.ensure_running();
+    }
+
+    fn handle_pipeline_hook(&self) {
+        let branch = "";
+        // TODO: figure out whether for a base branch or a MR
+        let job = CIJob::create(branch, &self.config);
+        job.update_statuses();
+    }
+
+    fn handle_push_hook(&self) {
+        let branch = "";
+        // if branch in base_branches
+        // TODO: tell job it's for the base branch, not a MR
+        let job = CIJob::create(branch, &self.config);
+        job.ensure_running();
+        // end if
+    }
+}
+
 fn call_ci(ref_id: &str) {
     // trigger = "/projects/:id/trigger/pipeline"
 }
@@ -18,11 +77,14 @@ fn call_ci(ref_id: &str) {
 fn execute_webhook(json: &Chunk) {
     if let Ok(data) = serde_json::from_slice::<Value>(json) {
         let kind = &data["object_kind"];
-        if let Some("merge_request") = kind.as_str() {
-            println!("Was a merge request");
-            if let Value::String(ref_id) = &data["object_attributes"]["last_commit"]["id"] {
-                call_ci(ref_id);
+        match kind.as_str() {
+            Some("merge_request") => {
+                println!("Was a merge request");
+                if let Value::String(ref_id) = &data["object_attributes"]["last_commit"]["id"] {
+                    call_ci(ref_id);
+                }
             }
+            _ => {}
         }
     }
 }
