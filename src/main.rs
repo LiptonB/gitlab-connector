@@ -1,18 +1,20 @@
 extern crate hyper;
 extern crate futures;
 extern crate serde_json;
+extern crate reqwest;
 
-use futures::{future, Stream};
+use futures::future;
 use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
-use hyper::rt::Future;
+use hyper::rt::{self, Future, Stream};
 use hyper::service::service_fn;
 use serde_json::Value;
 
 // Just a simple type alias
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
-struct CIJob {
-
+struct CIJob<'a> {
+    heads: Vec<BranchHead>,
+    config: &'a Config,
 }
 
 struct BranchHead {
@@ -21,20 +23,40 @@ struct BranchHead {
 }
 
 struct Config {
-
+    pipeline_url: String,
+    extra_repo_urls: Vec<String>,
+    trigger_url: String,
+    watched_branches: Vec<String>,
+    auth_token: String,
 }
 
 struct WebHookListener {
     config: Config,
 }
 
-impl CIJob {
-    fn create(branch: &str, conf: &Config) -> CIJob {
-        CIJob{}
+impl<'a> CIJob<'a> {
+    fn new(branch: &str, base: &str, conf: &'a Config) -> CIJob<'a> {
+        let mut job = CIJob {
+            heads: Vec::with_capacity(1+conf.extra_repo_urls.len()),
+            config: conf,
+        };
+
+        for url in &conf.extra_repo_urls {
+            job.heads.push(BranchHead::new_with_base(branch, base, url));
+        }
+
+        job
     }
 
     fn ensure_running(&self) {
-
+        // For now, just make the call to the trigger_url
+        // http://192.168.56.102/api/v4/projects/4/trigger/pipeline
+        // token=a4a307a227afa1ca744b6c9c543dce
+        let client = reqwest::Client::new();
+        let params = [("token", "a4a307a227afa1ca744b6c9c543dce"), ("ref", "master")];
+        let res = client.post(&self.config.trigger_url)
+            .form(&params)
+            .send();
     }
 
     fn update_statuses(&self) {
@@ -43,28 +65,36 @@ impl CIJob {
 }
 
 impl BranchHead {
-
+    fn new_with_base(branch: &str, base: &str, url: &str) -> BranchHead {
+        BranchHead{
+            branch: "".to_string(),
+            commit: "".to_string(),
+        }
+    }
 }
 
 impl WebHookListener {
     fn handle_mr_hook(&self) {
         let branch = "";
-        let job = CIJob::create(branch, &self.config);
+        let base = "";
+        let job = CIJob::new(branch, base, &self.config);
         job.ensure_running();
     }
 
     fn handle_pipeline_hook(&self) {
         let branch = "";
+        let base = "";
         // TODO: figure out whether for a base branch or a MR
-        let job = CIJob::create(branch, &self.config);
+        let job = CIJob::new(branch, base, &self.config);
         job.update_statuses();
     }
 
     fn handle_push_hook(&self) {
         let branch = "";
+        let base = "";
         // if branch in base_branches
         // TODO: tell job it's for the base branch, not a MR
-        let job = CIJob::create(branch, &self.config);
+        let job = CIJob::new(branch, base, &self.config);
         job.ensure_running();
         // end if
     }
