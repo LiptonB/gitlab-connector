@@ -15,6 +15,7 @@ type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 struct CIJob<'a> {
     heads: Vec<BranchHead>,
     config: &'a Config,
+    client: reqwest::Client,
 }
 
 struct BranchHead {
@@ -25,7 +26,6 @@ struct BranchHead {
 struct Config {
     pipeline_url: String,
     extra_repo_urls: Vec<String>,
-    trigger_url: String,
     watched_branches: Vec<String>,
     auth_token: String,
 }
@@ -39,6 +39,7 @@ impl<'a> CIJob<'a> {
         let mut job = CIJob {
             heads: Vec::with_capacity(1+conf.extra_repo_urls.len()),
             config: conf,
+            client: reqwest::Client::new(),
         };
 
         for url in &conf.extra_repo_urls {
@@ -48,15 +49,49 @@ impl<'a> CIJob<'a> {
         job
     }
 
+    fn affects_status(&self, head: &BranchHead) -> bool {
+        true
+    }
+
     fn ensure_running(&self) {
+        // Check the BranchHeads for running jobs
+        let mut ci_url = None;
+        let mut needs_start = false;
+        for head in &self.heads {
+            if self.affects_status(head) {
+                // GET $url/repository/commits/:sha/statuses?name=CI-MR
+                match result {
+                    None => {
+                        needs_start = true;
+                        break;
+                    }
+                    Some(status_url) => {
+                        match ci_url {
+                            None => {
+                                ci_url = result;
+                            }
+                            Some(ci_url_val) => {
+                                if status_url != ci_url_val {
+                                    needs_start = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Check if already running
+        // GET http://192.168.56.102/api/v4/projects/:id/pipelines
+        //
         // For now, just make the call to the trigger_url
-        // http://192.168.56.102/api/v4/projects/4/trigger/pipeline
-        // token=a4a307a227afa1ca744b6c9c543dce
-        let client = reqwest::Client::new();
-        let params = [("token", "a4a307a227afa1ca744b6c9c543dce"), ("ref", "master")];
-        let res = client.post(&self.config.trigger_url)
-            .form(&params)
-            .send();
+        // POST http://192.168.56.102/api/v4/projects/:id/pipeline
+        // ref=
+        // variables=
+        //let params = [("token", &self.config.trigger_token[..]), ("ref", "master")];
+        //let res = self.client.post(&self.config.trigger_url)
+        //    .form(&params)
+        //    .send();
     }
 
     fn update_statuses(&self) {
