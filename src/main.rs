@@ -5,7 +5,7 @@ extern crate reqwest;
 
 use futures::future;
 use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
-use hyper::rt::{self, Future, Stream};
+use hyper::rt::{Future, Stream};
 use hyper::service::service_fn;
 use serde_json::Value;
 
@@ -18,6 +18,7 @@ struct CIJob<'a> {
     client: reqwest::Client,
 }
 
+#[derive(Debug)]
 struct BranchHead<'a> {
     commit: String,
     branch: String,
@@ -25,6 +26,7 @@ struct BranchHead<'a> {
     config: &'a Config,
 }
 
+#[derive(Debug)]
 struct Config {
     pipeline_url: String,
     extra_repo_urls: Vec<String>,
@@ -34,6 +36,11 @@ struct Config {
 
 struct WebHookListener {
     config: Config,
+}
+
+#[derive(Debug)]
+struct Error {
+    msg: String,
 }
 
 impl<'a> CIJob<'a> {
@@ -103,6 +110,18 @@ impl<'a> CIJob<'a> {
     }
 }
 
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Error {
+        Error::from("reqwest")
+    }
+}
+
+impl<'a> From<&'a str> for Error {
+    fn from(msg: &str) -> Error {
+        Error {msg: msg.to_string()}
+    }
+}
+
 impl<'a> BranchHead<'a> {
     fn new_with_base(branch: &str, base: &str, url: &'a str, config: &'a Config) -> BranchHead<'a> {
         BranchHead {
@@ -110,6 +129,26 @@ impl<'a> BranchHead<'a> {
             commit: "".to_string(),
             repo_url: url,
             config: config,
+        }
+    }
+
+    fn new(branch: &str, url: &'a str, config: &'a Config)
+            -> Result<BranchHead<'a>, Error> {
+        let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
+        let resp: Value = reqwest::Client::new()
+            .get(&branch_url)
+            .query(&[("private_token", &config.auth_token)])
+            .send()?
+            .json()?;
+
+        match resp["id"].as_str() {
+            Some(commit) => Ok(BranchHead {
+                branch: branch.to_string(),
+                commit: commit.to_string(),
+                repo_url: url,
+                config,
+            }),
+            None => Err(Error::from("Branch not found")),
         }
     }
 
@@ -263,12 +302,7 @@ fn main() {
         auth_token: "xQjkvDxxpu-o2ny4YNUo".to_string(),
     };
 
-    let bh = BranchHead {
-        commit: "990ebddeb72329be0ffdee2898b3f3565e4291cd".to_string(),
-        branch: "master".to_string(),
-        repo_url: &config.pipeline_url,
-        config: &config,
-    };
+    let bh = BranchHead::new("master", &config.pipeline_url, &config).unwrap();
 
     if let Some(status_url) = bh.get_status_url("default").unwrap() {
         println!("status_url: {}", status_url);
