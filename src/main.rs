@@ -13,14 +13,16 @@ use serde_json::Value;
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
 struct CIJob<'a> {
-    heads: Vec<BranchHead>,
+    heads: Vec<BranchHead<'a>>,
     config: &'a Config,
     client: reqwest::Client,
 }
 
-struct BranchHead {
+struct BranchHead<'a> {
     commit: String,
     branch: String,
+    repo_url: &'a str,
+    config: &'a Config,
 }
 
 struct Config {
@@ -43,7 +45,7 @@ impl<'a> CIJob<'a> {
         };
 
         for url in &conf.extra_repo_urls {
-            job.heads.push(BranchHead::new_with_base(branch, base, url));
+            job.heads.push(BranchHead::new_with_base(branch, base, url, conf));
         }
 
         job
@@ -55,11 +57,12 @@ impl<'a> CIJob<'a> {
 
     fn ensure_running(&self) {
         // Check the BranchHeads for running jobs
-        let mut ci_url = None;
-        let mut needs_start = false;
+        //let mut ci_url = None;
+        //let mut needs_start = false;
         for head in &self.heads {
             if self.affects_status(head) {
-                // GET $url/repository/commits/:sha/statuses?name=CI-MR
+                /*
+                let result = head.get_status("MR-CI")?;
                 match result {
                     None => {
                         needs_start = true;
@@ -79,6 +82,7 @@ impl<'a> CIJob<'a> {
                         }
                     }
                 }
+                */
             }
         }
         // Check if already running
@@ -99,12 +103,27 @@ impl<'a> CIJob<'a> {
     }
 }
 
-impl BranchHead {
-    fn new_with_base(branch: &str, base: &str, url: &str) -> BranchHead {
-        BranchHead{
+impl<'a> BranchHead<'a> {
+    fn new_with_base(branch: &str, base: &str, url: &'a str, config: &'a Config) -> BranchHead<'a> {
+        BranchHead {
             branch: "".to_string(),
             commit: "".to_string(),
+            repo_url: url,
+            config: config,
         }
+    }
+
+    fn get_status_url(&self, name: &str) -> Result<Option<String>, reqwest::Error> {
+        let url = format!("{base}/repository/commits/{commit}/statuses",
+                          base=self.repo_url, commit=self.commit);
+        let resp: Value = reqwest::Client::new()
+            .get(&url)
+            .query(&[("name", name), ("private_token", &self.config.auth_token),
+                     ("ref", &self.branch)])
+            .send()?
+            .json()?;
+
+        Ok(resp[0]["target_url"].as_str().map(str::to_string))
     }
 }
 
@@ -217,7 +236,7 @@ fn webhook(req: Request<Body>) -> BoxFut {
     Box::new(future::ok(response))
 }
 
-fn main() {
+fn run_server() {
     // This is our socket address...
     let addr = ([127, 0, 0, 1], 3000).into();
 
@@ -234,4 +253,26 @@ fn main() {
 
     // Run this server for... forever!
     hyper::rt::run(server);
+}
+
+fn main() {
+    let config = Config {
+        pipeline_url: "http://192.168.56.102/api/v4/projects/4".to_string(),
+        extra_repo_urls: vec!["http://192.168.56.102/api/v4/projects/5".to_string()],
+        watched_branches: vec!["name".to_string()],
+        auth_token: "xQjkvDxxpu-o2ny4YNUo".to_string(),
+    };
+
+    let bh = BranchHead {
+        commit: "990ebddeb72329be0ffdee2898b3f3565e4291cd".to_string(),
+        branch: "master".to_string(),
+        repo_url: &config.pipeline_url,
+        config: &config,
+    };
+
+    if let Some(status_url) = bh.get_status_url("default").unwrap() {
+        println!("status_url: {}", status_url);
+    } else {
+        println!("No status url");
+    }
 }
