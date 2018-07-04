@@ -31,28 +31,48 @@ struct BranchHead<'a> {
 #[derive(Debug)]
 struct Config {
     pipeline_url: String,
-    extra_repo_urls: Vec<String>,
+    repo_urls: Vec<String>,
     watched_branches: Vec<String>,
     auth_token: String,
 }
 
-struct WebHookListener {
-    config: Config,
-}
+// struct WebHookListener {
+//     config: Config,
+// }
 
 #[derive(Debug)]
 struct Error {
     msg: String,
 }
 
+impl Config {
+    pub fn new<'i, I>(pipeline_url: &str, extra_repo_urls: I, watched_branches: I,
+           auth_token: &str) -> Config
+    where
+        I: Iterator<Item = &'i str>,
+    {
+        let pipeline_url = pipeline_url.to_owned();
+        let mut repo_urls = vec![pipeline_url.clone()];
+        for url in extra_repo_urls {
+            repo_urls.push(url.to_owned());
+        }
+        Config {
+            pipeline_url,
+            repo_urls,
+            watched_branches: watched_branches.map(&str::to_owned).collect(),
+            auth_token: auth_token.to_owned(),
+        }
+    }
+}
+
 impl<'a> CIJob<'a> {
     fn new(branch: &str, base: &str, conf: &'a Config) -> Result<CIJob<'a>, Error> {
         let mut job = CIJob {
-            heads: Vec::with_capacity(1+conf.extra_repo_urls.len()),
+            heads: Vec::with_capacity(conf.repo_urls.len()),
             config: conf,
         };
 
-        for url in &conf.extra_repo_urls {
+        for url in &conf.repo_urls {
             let mut head = BranchHead::new(branch, url, conf)?;
             if head.is_none() {
                 head = BranchHead::new(base, url, conf)?;
@@ -183,36 +203,36 @@ impl<'a> BranchHead<'a> {
     }
 }
 
-impl WebHookListener {
-    fn handle_mr_hook(&self) -> Result<(), Error> {
-        let branch = "";
-        let base = "";
-        let job = CIJob::new(branch, base, &self.config)?;
-        job.ensure_running();
-        Ok(())
-    }
-
-    fn handle_pipeline_hook(&self) -> Result<(), Error> {
-        let branch = "";
-        let base = "";
-        // TODO: figure out whether for a base branch or a MR
-        let job = CIJob::new(branch, base, &self.config)?;
-        job.update_statuses();
-        Ok(())
-    }
-
-    fn handle_push_hook(&self) -> Result<(), Error> {
-        let branch = "";
-        let base = "";
-        // if branch in base_branches
-        // TODO: tell job it's for the base branch, not a MR
-        let job = CIJob::new(branch, base, &self.config)?;
-        job.ensure_running();
-        Ok(())
-        // end if
-    }
-}
-
+// impl WebHookListener {
+//     fn handle_mr_hook(&self) -> Result<(), Error> {
+//         let branch = "";
+//         let base = "";
+//         let job = CIJob::new(branch, base, &self.config)?;
+//         job.ensure_running();
+//         Ok(())
+//     }
+// 
+//     fn handle_pipeline_hook(&self) -> Result<(), Error> {
+//         let branch = "";
+//         let base = "";
+//         // TODO: figure out whether for a base branch or a MR
+//         let job = CIJob::new(branch, base, &self.config)?;
+//         job.update_statuses();
+//         Ok(())
+//     }
+// 
+//     fn handle_push_hook(&self) -> Result<(), Error> {
+//         let branch = "";
+//         let base = "";
+//         // if branch in base_branches
+//         // TODO: tell job it's for the base branch, not a MR
+//         let job = CIJob::new(branch, base, &self.config)?;
+//         job.ensure_running();
+//         Ok(())
+//         // end if
+//     }
+// }
+// 
 // fn call_ci(ref_id: &str) {
 //     // trigger = "/projects/:id/trigger/pipeline"
 // }
@@ -315,12 +335,10 @@ impl WebHookListener {
 // }
 
 fn main() {
-    let config = Config {
-        pipeline_url: "http://192.168.56.102/api/v4/projects/4".to_string(),
-        extra_repo_urls: vec!["http://192.168.56.102/api/v4/projects/5".to_string()],
-        watched_branches: vec!["name".to_string()],
-        auth_token: "xQjkvDxxpu-o2ny4YNUo".to_string(),
-    };
+    let config = Config::new("http://192.168.56.102/api/v4/projects/4",
+                             vec!["http://192.168.56.102/api/v4/projects/5"].into_iter(),
+                             vec!["name"].into_iter(),
+                             "xQjkvDxxpu-o2ny4YNUo");
 
     let job = CIJob::new("foo", "master", &config).unwrap();
     println!("job: {:?}", job);
