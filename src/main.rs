@@ -16,7 +16,8 @@ use std::error::Error as StdError; // needed for `description`
 
 #[derive(Debug)]
 struct CIJob<'a> {
-    heads: Vec<BranchHead<'a>>,
+    branch_heads: Vec<BranchHead<'a>>,
+    base_heads: Vec<BranchHead<'a>>,
     config: &'a Config,
 }
 
@@ -68,55 +69,58 @@ impl Config {
 impl<'a> CIJob<'a> {
     fn new(branch: &str, base: &str, conf: &'a Config) -> Result<CIJob<'a>, Error> {
         let mut job = CIJob {
-            heads: Vec::with_capacity(conf.repo_urls.len()),
+            branch_heads: Vec::new(),
+            base_heads: Vec::new(),
             config: conf,
         };
 
         for url in &conf.repo_urls {
-            let mut head = BranchHead::new(branch, url, conf)?;
-            if head.is_none() {
-                head = BranchHead::new(base, url, conf)?;
+            let head = BranchHead::new(branch, url, conf)?;
+            if let Some(head) = head {
+                job.branch_heads.push(head);
+                continue;
             }
+
+            let head = BranchHead::new(base, url, conf)?;
             let head = head.ok_or(Error::from("Base branch does not exist"))?;
-            job.heads.push(head);
+            job.base_heads.push(head);
         }
 
         Ok(job)
     }
 
-    fn affects_status(&self, head: &BranchHead) -> bool {
-        true
-    }
-
-    fn ensure_running(&self) {
+    fn ensure_running(&self) -> Result<(), Error> {
         // Check the BranchHeads for running jobs
         //let mut ci_url = None;
         //let mut needs_start = false;
-        for head in &self.heads {
-            if self.affects_status(head) {
-                /*
-                let result = head.get_status("MR-CI")?;
-                match result {
-                    None => {
-                        needs_start = true;
-                        break;
-                    }
-                    Some(status_url) => {
-                        match ci_url {
-                            None => {
-                                ci_url = result;
-                            }
-                            Some(ci_url_val) => {
-                                if status_url != ci_url_val {
-                                    needs_start = true;
-                                    break;
-                                }
+        for head in &self.branch_heads {
+            if let Some((status, url)) = head.get_status_url("default")? {
+                println!("status: {}", status);
+                println!("url: {}", url);
+            }
+
+            /*
+            let result = head.get_status("MR-CI")?;
+            match result {
+                None => {
+                    needs_start = true;
+                    break;
+                }
+                Some(status_url) => {
+                    match ci_url {
+                        None => {
+                            ci_url = result;
+                        }
+                        Some(ci_url_val) => {
+                            if status_url != ci_url_val {
+                                needs_start = true;
+                                break;
                             }
                         }
                     }
                 }
-                */
             }
+            */
         }
         // Check if already running
         // GET http://192.168.56.102/api/v4/projects/:id/pipelines
@@ -129,6 +133,7 @@ impl<'a> CIJob<'a> {
         //let res = self.client.post(&self.config.trigger_url)
         //    .form(&params)
         //    .send();
+        Ok(())
     }
 
     fn update_statuses(&self) {
@@ -149,15 +154,6 @@ impl<'a> From<&'a str> for Error {
 }
 
 impl<'a> BranchHead<'a> {
-    fn new_with_base(branch: &str, base: &str, url: &'a str, config: &'a Config) -> BranchHead<'a> {
-        BranchHead {
-            branch: "".to_string(),
-            commit: "".to_string(),
-            repo_url: url,
-            config: config,
-        }
-    }
-
     fn new(branch: &str, url: &'a str, config: &'a Config)
             -> Result<Option<BranchHead<'a>>, Error> {
         let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
@@ -196,8 +192,9 @@ impl<'a> BranchHead<'a> {
             return Ok(None);
         }
         match (resp[0]["target_url"].as_str(), resp[0]["status"].as_str()) {
-            (Some(target_url), Some(status)) =>
-                Ok(Some((status.to_string(), target_url.to_string()))),
+            (Some(target_url), Some(status)) => {
+                Ok(Some((status.to_string(), target_url.to_string())))
+            },
             _ => Err(Error::from("Response missing target_url or status field")),
         }
     }
@@ -337,9 +334,10 @@ impl<'a> BranchHead<'a> {
 fn main() {
     let config = Config::new("http://192.168.56.102/api/v4/projects/4",
                              vec!["http://192.168.56.102/api/v4/projects/5"].into_iter(),
-                             vec!["name"].into_iter(),
+                             vec!["master"].into_iter(),
                              "xQjkvDxxpu-o2ny4YNUo");
 
-    let job = CIJob::new("foo", "master", &config).unwrap();
+    let job = CIJob::new("other-branch", "master", &config).unwrap();
     println!("job: {:?}", job);
+    job.ensure_running();
 }
