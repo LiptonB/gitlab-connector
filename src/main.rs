@@ -47,20 +47,18 @@ struct Error {
 }
 
 impl Config {
-    pub fn new<'i, I>(pipeline_url: &str, extra_repo_urls: I, watched_branches: I,
-           auth_token: &str) -> Config
-    where
-        I: Iterator<Item = &'i str>,
+    pub fn new(pipeline_url: &str, extra_repo_urls: &[&str], watched_branches: &[&str],
+        auth_token: &str) -> Config
     {
         let pipeline_url = pipeline_url.to_owned();
         let mut repo_urls = vec![pipeline_url.clone()];
-        for url in extra_repo_urls {
+        for &url in extra_repo_urls {
             repo_urls.push(url.to_owned());
         }
         Config {
             pipeline_url,
             repo_urls,
-            watched_branches: watched_branches.map(&str::to_owned).collect(),
+            watched_branches: watched_branches.iter().map(|&b| b.to_owned()).collect(),
             auth_token: auth_token.to_owned(),
         }
     }
@@ -333,8 +331,8 @@ impl<'a> BranchHead<'a> {
 
 fn main() {
     let config = Config::new("http://192.168.56.102/api/v4/projects/4",
-                             vec!["http://192.168.56.102/api/v4/projects/5"].into_iter(),
-                             vec!["master"].into_iter(),
+                             &vec!["http://192.168.56.102/api/v4/projects/5"],
+                             &vec!["master"],
                              "xQjkvDxxpu-o2ny4YNUo");
 
     let job = CIJob::new("other-branch", "master", &config).unwrap();
