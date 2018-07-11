@@ -1,5 +1,6 @@
 extern crate hyper;
 extern crate futures;
+#[macro_use]
 extern crate serde_json;
 extern crate reqwest;
 
@@ -7,6 +8,7 @@ extern crate reqwest;
 // use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
 // use hyper::rt::{Future, Stream};
 // use hyper::service::service_fn;
+use std::collections::HashSet;
 use reqwest::StatusCode;
 use serde_json::Value;
 use std::error::Error as StdError; // needed for `description`
@@ -27,6 +29,21 @@ struct BranchHead<'a> {
     branch: String,
     repo_url: &'a str,
     config: &'a Config,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct Pipeline {
+    status: Status,
+    url: String,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+enum Status {
+    Pending,
+    Running,
+    Success,
+    Failed,
+    Canceled,
 }
 
 #[derive(Debug)]
@@ -89,52 +106,55 @@ impl<'a> CIJob<'a> {
 
     fn ensure_running(&self) -> Result<(), Error> {
         // Check the BranchHeads for running jobs
-        //let mut ci_url = None;
-        //let mut needs_start = false;
+        let mut needs_start = false;
+        let mut pipelines = HashSet::new();
         for head in &self.branch_heads {
-            if let Some((status, url)) = head.get_status_url("default")? {
-                println!("status: {}", status);
-                println!("url: {}", url);
-            }
-
-            /*
-            let result = head.get_status("MR-CI")?;
-            match result {
+            match head.get_current_pipeline("default")? {
                 None => {
                     needs_start = true;
-                    break;
                 }
-                Some(status_url) => {
-                    match ci_url {
-                        None => {
-                            ci_url = result;
-                        }
-                        Some(ci_url_val) => {
-                            if status_url != ci_url_val {
-                                needs_start = true;
-                                break;
-                            }
-                        }
+                Some(pipeline) => {
+                    if !pipelines.contains(&pipeline) {
+                        needs_start = true;
+                        pipelines.insert(pipeline);
                     }
                 }
             }
-            */
         }
-        // Check if already running
-        // GET http://192.168.56.102/api/v4/projects/:id/pipelines
-        //
-        // For now, just make the call to the trigger_url
-        // POST http://192.168.56.102/api/v4/projects/:id/pipeline
-        // ref=
-        // variables=
-        //let params = [("token", &self.config.trigger_token[..]), ("ref", "master")];
-        //let res = self.client.post(&self.config.trigger_url)
-        //    .form(&params)
-        //    .send();
+        if needs_start {
+            for pipeline in pipelines {
+                pipeline.ensure_stopped();
+            }
+            // TODO: does status update go here?
+            let pipeline_link = self.start_pipeline()?;
+            self.update_statuses(&pipeline_link);
+        }
         Ok(())
     }
 
-    fn update_statuses(&self) {
+    fn start_pipeline(&self) -> Result<String, Error> {
+        // TODO: need to find the branch head for the pipeline repo to get "ref"
+        let params = json!({"ref": "master", "variables": [{"key": "commits", "value": self.format_commits_str()}]});
+        let resp = reqwest::Client::new()
+            .post(&self.config.pipeline_url)
+            .query(&[("private_token", &self.config.auth_token)]) // replace with header?
+            .json(&params)
+            .send()?;
+
+        Ok("".to_string())
+    }
+
+    fn format_commits_str(&self) -> String {
+        "".to_string()
+    }
+
+    fn update_statuses(&self, pipeline: &str) {
+
+    }
+}
+
+impl Pipeline {
+    fn ensure_stopped(&self) {
 
     }
 }
@@ -176,7 +196,7 @@ impl<'a> BranchHead<'a> {
         }
     }
 
-    fn get_status_url(&self, name: &str) -> Result<Option<(String, String)>, Error> {
+    fn get_current_pipeline(&self, name: &str) -> Result<Option<Pipeline>, Error> {
         let url = format!("{base}/repository/commits/{commit}/statuses",
                           base=self.repo_url, commit=self.commit);
         let resp: Value = reqwest::Client::new()
@@ -191,10 +211,26 @@ impl<'a> BranchHead<'a> {
         }
         match (resp[0]["target_url"].as_str(), resp[0]["status"].as_str()) {
             (Some(target_url), Some(status)) => {
-                Ok(Some((status.to_string(), target_url.to_string())))
+                Ok(Some(Pipeline {
+                    status: Status::parse(status)?,
+                    url: target_url.to_string(),
+                }))
             },
             _ => Err(Error::from("Response missing target_url or status field")),
         }
+    }
+}
+
+impl Status {
+    fn parse(status: &str) -> Result<Self, Error> {
+        Ok(match status {
+            "pending" => Status::Pending,
+            "running" => Status::Running,
+            "success" => Status::Success,
+            "failed" => Status::Failed,
+            "canceled" => Status::Canceled,
+            _ => { return Err(Error::from("Unknown status value")); },
+        })
     }
 }
 
