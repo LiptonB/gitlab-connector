@@ -125,30 +125,39 @@ impl<'a> CIJob<'a> {
             for pipeline in pipelines {
                 pipeline.ensure_stopped();
             }
-            // TODO: does status update go here?
-            let pipeline_link = self.start_pipeline()?;
-            self.update_statuses(&pipeline_link);
+            self.start_pipeline()?;
         }
         Ok(())
     }
 
-    fn start_pipeline(&self) -> Result<String, Error> {
+    fn start_pipeline(&self) -> Result<(), Error> {
         // TODO: need to find the branch head for the pipeline repo to get "ref"
         let params = json!({"ref": "master", "variables": [{"key": "commits", "value": self.format_commits_str()}]});
-        let resp = reqwest::Client::new()
+        let mut resp = reqwest::Client::new()
             .post(&self.config.pipeline_url)
             .query(&[("private_token", &self.config.auth_token)]) // replace with header?
             .json(&params)
             .send()?;
 
-        Ok("".to_string())
+        match resp.status() {
+            StatusCode::Ok => (),
+            err => return Err(Error::from(format!("Bad HTTP status code: {}", err).as_str())),
+        }
+
+        let resp: Value = resp.json()?;
+        match (resp["id"].as_i64(), resp["status"].as_str()) {
+            (Some(id), Some(status)) => self.update_statuses(id, Status::parse(status)?),
+            _ => return Err(Error::from("Missing JSON keys")),
+        }
+
+        Ok(())
     }
 
     fn format_commits_str(&self) -> String {
         "".to_string()
     }
 
-    fn update_statuses(&self, pipeline: &str) {
+    fn update_statuses(&self, pipeline_id: i64, pipeline_status: Status) {
 
     }
 }
@@ -180,8 +189,10 @@ impl<'a> BranchHead<'a> {
             .query(&[("private_token", &config.auth_token)])
             .send()?;
 
-        if resp.status() == StatusCode::NotFound {
-            return Ok(None);
+        match resp.status() {
+            StatusCode::NotFound => {return Ok(None);},
+            StatusCode::Ok => (),
+            err => return Err(Error::from(format!("Bad HTTP status code: {}", err).as_str())),
         }
 
         let resp: Value = resp.json()?;
@@ -373,5 +384,5 @@ fn main() {
 
     let job = CIJob::new("other-branch", "master", &config).unwrap();
     println!("job: {:?}", job);
-    job.ensure_running();
+    job.ensure_running().unwrap();
 }
