@@ -1,8 +1,8 @@
 extern crate hyper;
 extern crate futures;
-#[macro_use]
-extern crate serde_json;
+#[macro_use] extern crate serde_json;
 extern crate reqwest;
+#[macro_use] extern crate failure;
 
 //use futures::future;
 // use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
@@ -11,7 +11,8 @@ extern crate reqwest;
 use std::collections::HashSet;
 use reqwest::StatusCode;
 use serde_json::Value;
-use std::error::Error as StdError; // needed for `description`
+// use std::error::Error as StdError; // needed for `description`
+use failure::Error;
 
 // Just a simple type alias
 //type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
@@ -58,25 +59,34 @@ struct Config {
 //     config: Config,
 // }
 
-#[derive(Debug)]
-struct Error {
-    msg: String,
+#[derive(Debug, Fail)]
+enum ConnectorError {
+    #[fail(display = "branch does not exist: {}", branch)]
+    NonexistentBranch {
+        branch: String,
+    },
+    #[fail(display = "response missing expected keys")]
+    MalformedResponse,
+    #[fail(display = "invalid value for Status: {}", status)]
+    InvalidStatus {
+        status: String,
+    },
 }
 
 impl Config {
     pub fn new(pipeline_url: &str, extra_repo_urls: &[&str], watched_branches: &[&str],
         auth_token: &str) -> Config
     {
-        let pipeline_url = pipeline_url.to_owned();
+        let pipeline_url = pipeline_url.to_string();
         let mut repo_urls = vec![pipeline_url.clone()];
         for &url in extra_repo_urls {
-            repo_urls.push(url.to_owned());
+            repo_urls.push(url.to_string());
         }
         Config {
             pipeline_url,
             repo_urls,
-            watched_branches: watched_branches.iter().map(|&b| b.to_owned()).collect(),
-            auth_token: auth_token.to_owned(),
+            watched_branches: watched_branches.iter().map(|&b| b.to_string()).collect(),
+            auth_token: auth_token.to_string(),
         }
     }
 }
@@ -97,7 +107,7 @@ impl<'a> CIJob<'a> {
             }
 
             let head = BranchHead::new(base, url, conf)?;
-            let head = head.ok_or(Error::from("Base branch does not exist"))?;
+            let head = head.ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
             job.base_heads.push(head);
         }
 
@@ -137,17 +147,13 @@ impl<'a> CIJob<'a> {
             .post(&self.config.pipeline_url)
             .query(&[("private_token", &self.config.auth_token)]) // replace with header?
             .json(&params)
-            .send()?;
-
-        match resp.status() {
-            StatusCode::Ok => (),
-            err => return Err(Error::from(format!("Bad HTTP status code: {}", err).as_str())),
-        }
+            .send()?
+            .error_for_status()?;
 
         let resp: Value = resp.json()?;
         match (resp["id"].as_i64(), resp["status"].as_str()) {
             (Some(id), Some(status)) => self.update_statuses(id, Status::parse(status)?),
-            _ => return Err(Error::from("Missing JSON keys")),
+            _ => return Err(ConnectorError::MalformedResponse),
         }
 
         Ok(())
@@ -168,32 +174,19 @@ impl Pipeline {
     }
 }
 
-impl From<reqwest::Error> for Error {
-    fn from(err: reqwest::Error) -> Error {
-        Error::from(err.description())
-    }
-}
-
-impl<'a> From<&'a str> for Error {
-    fn from(msg: &str) -> Error {
-        Error {msg: msg.to_string()}
-    }
-}
-
 impl<'a> BranchHead<'a> {
     fn new(branch: &str, url: &'a str, config: &'a Config)
             -> Result<Option<BranchHead<'a>>, Error> {
         let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
-        let mut resp = reqwest::Client::new()
+        let resp = reqwest::Client::new()
             .get(&branch_url)
             .query(&[("private_token", &config.auth_token)])
             .send()?;
 
-        match resp.status() {
-            StatusCode::NotFound => {return Ok(None);},
-            StatusCode::Ok => (),
-            err => return Err(Error::from(format!("Bad HTTP status code: {}", err).as_str())),
+        if resp.status() == StatusCode::NotFound {
+            return Ok(None);
         }
+        let resp = resp.error_for_status()?;
 
         let resp: Value = resp.json()?;
         match resp["id"].as_str() {
@@ -203,7 +196,7 @@ impl<'a> BranchHead<'a> {
                 repo_url: url,
                 config,
             })),
-            None => Err(Error::from("Branch not found")),
+            None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}),
         }
     }
 
@@ -227,7 +220,7 @@ impl<'a> BranchHead<'a> {
                     url: target_url.to_string(),
                 }))
             },
-            _ => Err(Error::from("Response missing target_url or status field")),
+            _ => Err(ConnectorError::MalformedResponse),
         }
     }
 }
@@ -240,7 +233,7 @@ impl Status {
             "success" => Status::Success,
             "failed" => Status::Failed,
             "canceled" => Status::Canceled,
-            _ => { return Err(Error::from("Unknown status value")); },
+            _ => { return Err(ConnectorError::InvalidStatus{status: status.to_string()}); },
         })
     }
 }
