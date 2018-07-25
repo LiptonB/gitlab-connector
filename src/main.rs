@@ -153,7 +153,7 @@ impl<'a> CIJob<'a> {
         let resp: Value = resp.json()?;
         match (resp["id"].as_i64(), resp["status"].as_str()) {
             (Some(id), Some(status)) => self.update_statuses(id, Status::parse(status)?),
-            _ => return Err(ConnectorError::MalformedResponse),
+            _ => return Err(ConnectorError::MalformedResponse.into()),
         }
 
         Ok(())
@@ -186,7 +186,7 @@ impl<'a> BranchHead<'a> {
         if resp.status() == StatusCode::NotFound {
             return Ok(None);
         }
-        let resp = resp.error_for_status()?;
+        let mut resp = resp.error_for_status()?;
 
         let resp: Value = resp.json()?;
         match resp["id"].as_str() {
@@ -196,7 +196,7 @@ impl<'a> BranchHead<'a> {
                 repo_url: url,
                 config,
             })),
-            None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}),
+            None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}.into()),
         }
     }
 
@@ -220,7 +220,7 @@ impl<'a> BranchHead<'a> {
                     url: target_url.to_string(),
                 }))
             },
-            _ => Err(ConnectorError::MalformedResponse),
+            _ => Err(ConnectorError::MalformedResponse.into()),
         }
     }
 }
@@ -233,7 +233,7 @@ impl Status {
             "success" => Status::Success,
             "failed" => Status::Failed,
             "canceled" => Status::Canceled,
-            _ => { return Err(ConnectorError::InvalidStatus{status: status.to_string()}); },
+            _ => { return Err(ConnectorError::InvalidStatus{status: status.to_string()}.into()); },
         })
     }
 }
