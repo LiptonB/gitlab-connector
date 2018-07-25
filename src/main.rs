@@ -9,6 +9,7 @@ extern crate reqwest;
 // use hyper::rt::{Future, Stream};
 // use hyper::service::service_fn;
 use std::collections::HashSet;
+use std::str::FromStr;
 use reqwest::StatusCode;
 use serde_json::Value;
 // use std::error::Error as StdError; // needed for `description`
@@ -152,7 +153,7 @@ impl<'a> CIJob<'a> {
 
         let resp: Value = resp.json()?;
         match (resp["id"].as_i64(), resp["status"].as_str()) {
-            (Some(id), Some(status)) => self.update_statuses(id, Status::parse(status)?),
+            (Some(id), Some(status)) => self.update_statuses(id, status.parse()?),
             _ => return Err(ConnectorError::MalformedResponse.into()),
         }
 
@@ -216,7 +217,7 @@ impl<'a> BranchHead<'a> {
         match (resp[0]["target_url"].as_str(), resp[0]["status"].as_str()) {
             (Some(target_url), Some(status)) => {
                 Ok(Some(Pipeline {
-                    status: Status::parse(status)?,
+                    status: status.parse()?,
                     url: target_url.to_string(),
                 }))
             },
@@ -225,8 +226,10 @@ impl<'a> BranchHead<'a> {
     }
 }
 
-impl Status {
-    fn parse(status: &str) -> Result<Self, Error> {
+impl FromStr for Status {
+    type Err = Error;
+
+    fn from_str(status: &str) -> Result<Self, Self::Err> {
         Ok(match status {
             "pending" => Status::Pending,
             "running" => Status::Running,
