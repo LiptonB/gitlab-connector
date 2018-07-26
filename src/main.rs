@@ -22,6 +22,7 @@ use failure::Error;
 struct CIJob<'a> {
     branch_heads: Vec<BranchHead<'a>>,
     base_heads: Vec<BranchHead<'a>>,
+    pipeline_repo_head: &'a BranchHead<'a>,
     config: &'a Config,
 }
 
@@ -72,6 +73,8 @@ enum ConnectorError {
     InvalidStatus {
         status: String,
     },
+    #[fail(display = "internal error")]
+    InternalError,
 }
 
 impl Config {
@@ -94,25 +97,35 @@ impl Config {
 
 impl<'a> CIJob<'a> {
     fn new(branch: &str, base: &str, conf: &'a Config) -> Result<CIJob<'a>, Error> {
-        let mut job = CIJob {
-            branch_heads: Vec::new(),
-            base_heads: Vec::new(),
-            config: conf,
-        };
+        let mut branch_heads = Vec::new();
+        let mut base_heads = Vec::new();
+        let mut pipeline_repo_head = None;
 
         for url in &conf.repo_urls {
+
             let head = BranchHead::new(branch, url, conf)?;
             if let Some(head) = head {
-                job.branch_heads.push(head);
+                if url == &conf.pipeline_url {
+                    pipeline_repo_head = Some(&head);
+                }
+                branch_heads.push(head);
                 continue;
             }
 
             let head = BranchHead::new(base, url, conf)?;
             let head = head.ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
-            job.base_heads.push(head);
+            if url == &conf.pipeline_url {
+                pipeline_repo_head = Some(&head);
+            }
+            base_heads.push(head);
         }
 
-        Ok(job)
+        Ok(CIJob {
+            branch_heads,
+            base_heads,
+            config: conf,
+            pipeline_repo_head: pipeline_repo_head.ok_or(ConnectorError::InternalError)?,
+        })
     }
 
     fn ensure_running(&self) -> Result<(), Error> {
