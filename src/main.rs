@@ -36,7 +36,6 @@ struct BranchHead<'a> {
     repo_url: &'a str,
     config: &'a Config,
     head_type: BranchHeadType,
-    is_pipeline_repo: bool,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -102,6 +101,12 @@ impl Config {
     }
 }
 
+impl<'a> BranchHead<'a> {
+    fn is_pipeline_repo(&self) -> bool {
+        self.repo_url == self.config.pipeline_url
+    }
+}
+
 impl<'a> CIJob<'a> {
     fn new(branch: &str, base: &str, config: &'a Config) -> Result<CIJob<'a>, Error> {
         let mut job = CIJob {
@@ -152,7 +157,7 @@ impl<'a> CIJob<'a> {
 
     fn start_pipeline(&self) -> Result<(), Error> {
         let pipeline_head = self.branch_heads
-            .iter().find(|h| h.is_pipeline_repo)
+            .iter().find(|h| h.is_pipeline_repo())
             .ok_or(ConnectorError::InternalError{
                 msg: "No branch head for pipeline repo".to_string()})?;
 
@@ -211,7 +216,6 @@ impl<'a> BranchHead<'a> {
                 repo_url: url,
                 config,
                 head_type,
-                is_pipeline_repo: url == config.pipeline_url,
             })),
             None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}.into()),
         }
