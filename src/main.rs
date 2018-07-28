@@ -12,7 +12,6 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use reqwest::StatusCode;
 use serde_json::Value;
-// use std::error::Error as StdError; // needed for `description`
 use failure::Error;
 
 // Just a simple type alias
@@ -21,9 +20,13 @@ use failure::Error;
 #[derive(Debug)]
 struct CIJob<'a> {
     branch_heads: Vec<BranchHead<'a>>,
-    base_heads: Vec<BranchHead<'a>>,
-    pipeline_repo_head: &'a BranchHead<'a>,
     config: &'a Config,
+}
+
+#[derive(Debug)]
+enum BranchHeadType {
+    Base,
+    Active,
 }
 
 #[derive(Debug)]
@@ -32,6 +35,8 @@ struct BranchHead<'a> {
     branch: String,
     repo_url: &'a str,
     config: &'a Config,
+    head_type: BranchHeadType,
+    is_pipeline_repo: bool,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -73,8 +78,10 @@ enum ConnectorError {
     InvalidStatus {
         status: String,
     },
-    #[fail(display = "internal error")]
-    InternalError,
+    #[fail(display = "internal error: {}", msg)]
+    InternalError {
+        msg: String,
+    },
 }
 
 impl Config {
@@ -96,36 +103,25 @@ impl Config {
 }
 
 impl<'a> CIJob<'a> {
-    fn new(branch: &str, base: &str, conf: &'a Config) -> Result<CIJob<'a>, Error> {
-        let mut branch_heads = Vec::new();
-        let mut base_heads = Vec::new();
-        let mut pipeline_repo_head = None;
+    fn new(branch: &str, base: &str, config: &'a Config) -> Result<CIJob<'a>, Error> {
+        let mut job = CIJob {
+            branch_heads: Vec::new(),
+            config,
+        };
 
-        for url in &conf.repo_urls {
-
-            let head = BranchHead::new(branch, url, conf)?;
+        for url in &config.repo_urls {
+            let head = BranchHead::new(branch, url, config, BranchHeadType::Active)?;
             if let Some(head) = head {
-                if url == &conf.pipeline_url {
-                    pipeline_repo_head = Some(&head);
-                }
-                branch_heads.push(head);
+                job.branch_heads.push(head);
                 continue;
             }
 
-            let head = BranchHead::new(base, url, conf)?;
+            let head = BranchHead::new(base, url, config, BranchHeadType::Base)?;
             let head = head.ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
-            if url == &conf.pipeline_url {
-                pipeline_repo_head = Some(&head);
-            }
-            base_heads.push(head);
+            job.branch_heads.push(head);
         }
 
-        Ok(CIJob {
-            branch_heads,
-            base_heads,
-            config: conf,
-            pipeline_repo_head: pipeline_repo_head.ok_or(ConnectorError::InternalError)?,
-        })
+        Ok(job)
     }
 
     fn ensure_running(&self) -> Result<(), Error> {
@@ -155,8 +151,12 @@ impl<'a> CIJob<'a> {
     }
 
     fn start_pipeline(&self) -> Result<(), Error> {
-        // TODO: need to find the branch head for the pipeline repo to get "ref"
-        let params = json!({"ref": "master", "variables": [{"key": "commits", "value": self.format_commits_str()}]});
+        let pipeline_head = self.branch_heads
+            .iter().find(|h| h.is_pipeline_repo)
+            .ok_or(ConnectorError::InternalError{
+                msg: "No branch head for pipeline repo".to_string()})?;
+
+        let params = json!({"ref": pipeline_head.branch, "variables": [{"key": "commits", "value": self.format_commits_str()}]});
         let mut resp = reqwest::Client::new()
             .post(&self.config.pipeline_url)
             .query(&[("private_token", &self.config.auth_token)]) // replace with header?
@@ -173,6 +173,7 @@ impl<'a> CIJob<'a> {
         Ok(())
     }
 
+    // TODO
     fn format_commits_str(&self) -> String {
         "".to_string()
     }
@@ -189,7 +190,7 @@ impl Pipeline {
 }
 
 impl<'a> BranchHead<'a> {
-    fn new(branch: &str, url: &'a str, config: &'a Config)
+    fn new(branch: &str, url: &'a str, config: &'a Config, head_type: BranchHeadType)
             -> Result<Option<BranchHead<'a>>, Error> {
         let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
         let resp = reqwest::Client::new()
@@ -209,6 +210,8 @@ impl<'a> BranchHead<'a> {
                 commit: commit.to_string(),
                 repo_url: url,
                 config,
+                head_type,
+                is_pipeline_repo: url == config.pipeline_url,
             })),
             None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}.into()),
         }
