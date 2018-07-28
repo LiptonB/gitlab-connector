@@ -23,7 +23,7 @@ struct CIJob<'a> {
     config: &'a Config,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum BranchHeadType {
     Base,
     Active,
