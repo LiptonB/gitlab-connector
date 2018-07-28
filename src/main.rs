@@ -133,6 +133,12 @@ impl<'a> CIJob<'a> {
         let mut needs_start = false;
         let mut pipelines = HashSet::new();
         for head in &self.branch_heads {
+            // TODO: I wish this could be encapsulated better
+            if head.head_type != BranchHeadType::Active {
+                continue;
+            }
+
+            // TODO: "default" should probably come from the config
             match head.get_current_pipeline("default")? {
                 None => {
                     needs_start = true;
