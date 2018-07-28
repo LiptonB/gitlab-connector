@@ -118,12 +118,11 @@ impl<'a> CIJob<'a> {
             let head = BranchHead::new(branch, url, config, BranchHeadType::Active)?;
             if let Some(head) = head {
                 job.branch_heads.push(head);
-                continue;
+            } else {
+                let head = BranchHead::new(base, url, config, BranchHeadType::Base)?
+                    .ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
+                job.branch_heads.push(head);
             }
-
-            let head = BranchHead::new(base, url, config, BranchHeadType::Base)?;
-            let head = head.ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
-            job.branch_heads.push(head);
         }
 
         Ok(job)
