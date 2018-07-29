@@ -59,6 +59,7 @@ struct Config {
     repo_urls: Vec<String>,
     watched_branches: Vec<String>,
     auth_token: String,
+    pipeline_name: String,
 }
 
 // struct WebHookListener {
@@ -85,7 +86,7 @@ enum ConnectorError {
 
 impl Config {
     pub fn new(pipeline_url: &str, extra_repo_urls: &[&str], watched_branches: &[&str],
-        auth_token: &str) -> Config
+        auth_token: &str, pipeline_name: &str) -> Config
     {
         let pipeline_url = pipeline_url.to_string();
         let mut repo_urls = vec![pipeline_url.clone()];
@@ -97,6 +98,7 @@ impl Config {
             repo_urls,
             watched_branches: watched_branches.iter().map(|&b| b.to_string()).collect(),
             auth_token: auth_token.to_string(),
+            pipeline_name: pipeline_name.to_string(),
         }
     }
 }
@@ -139,7 +141,7 @@ impl<'a> CIJob<'a> {
             }
 
             // TODO: "default" should probably come from the config
-            match head.get_current_pipeline("default")? {
+            match head.get_current_pipeline(&self.config.pipeline_name)? {
                 None => {
                     needs_start = true;
                 }
@@ -167,8 +169,9 @@ impl<'a> CIJob<'a> {
                 msg: "No branch head for pipeline repo".to_string()})?;
 
         let params = json!({"ref": pipeline_head.branch, "variables": [{"key": "commits", "value": self.format_commits_str()}]});
+        let start_pipeline_url = format!("{base}/pipeline", base=self.config.pipeline_url);
         let mut resp = reqwest::Client::new()
-            .post(&self.config.pipeline_url)
+            .post(&start_pipeline_url)
             .query(&[("private_token", &self.config.auth_token)]) // replace with header?
             .json(&params)
             .send()?
@@ -401,7 +404,8 @@ fn main() {
     let config = Config::new("http://192.168.56.102/api/v4/projects/4",
                              &vec!["http://192.168.56.102/api/v4/projects/5"],
                              &vec!["master"],
-                             "xQjkvDxxpu-o2ny4YNUo");
+                             "xQjkvDxxpu-o2ny4YNUo",
+                             "gitlab-connector");
 
     let job = CIJob::new("other-branch", "master", &config).unwrap();
     println!("job: {:?}", job);
