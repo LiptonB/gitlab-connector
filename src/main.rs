@@ -16,6 +16,8 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use failure::Error;
 
+type Result<T> = std::result::Result<T, Error>;
+
 // Just a simple type alias
 //type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
@@ -125,7 +127,7 @@ impl Config {
                 .chain(iter::once(self.pipeline_url.as_str())))
     }
 
-    pub fn load(self) -> Environment {
+    pub fn load(self) -> Result<Environment> {
         let mut env = Environment {
             config: self,
             projects: Vec::new(),
@@ -135,14 +137,14 @@ impl Config {
             println!("Url: {}", url);
         }
 
-        env
+        Ok(env)
     }
 }
 
 
 
 impl<'a> CIJob<'a> {
-    fn new(branch: &str, base: &str, env: &'a Environment) -> Result<CIJob<'a>, Error> {
+    fn new(branch: &str, base: &str, env: &'a Environment) -> Result<CIJob<'a>> {
         let mut job = CIJob {
             branch_heads: Vec::new(),
             env,
@@ -162,7 +164,7 @@ impl<'a> CIJob<'a> {
         Ok(job)
     }
 
-    fn ensure_running(&self) -> Result<(), Error> {
+    fn ensure_running(&self) -> Result<()> {
         // Check the BranchHeads for running jobs
         let mut needs_start = false;
         let mut pipelines = HashSet::new();
@@ -194,7 +196,7 @@ impl<'a> CIJob<'a> {
         Ok(())
     }
 
-    fn start_pipeline(&self) -> Result<(), Error> {
+    fn start_pipeline(&self) -> Result<()> {
         let pipeline_head = self.branch_heads
             .iter().find(|h| h.is_pipeline_repo())
             .ok_or(ConnectorError::InternalError{
@@ -236,7 +238,7 @@ impl Pipeline {
 
 impl<'a> BranchHead<'a> {
     fn new(branch: &str, url: &'a str, env: &'a Environment, head_type: BranchHeadType)
-            -> Result<Option<BranchHead<'a>>, Error> {
+            -> Result<Option<BranchHead<'a>>> {
         let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
         let resp = reqwest::Client::new()
             .get(&branch_url)
@@ -261,7 +263,7 @@ impl<'a> BranchHead<'a> {
         }
     }
 
-    fn get_current_pipeline(&self, name: &str) -> Result<Option<Pipeline>, Error> {
+    fn get_current_pipeline(&self, name: &str) -> Result<Option<Pipeline>> {
         let url = format!("{base}/repository/commits/{commit}/statuses",
                           base=self.repo_url, commit=self.commit);
         let resp: Value = reqwest::Client::new()
@@ -293,7 +295,7 @@ impl<'a> BranchHead<'a> {
 impl FromStr for Status {
     type Err = Error;
 
-    fn from_str(status: &str) -> Result<Self, Self::Err> {
+    fn from_str(status: &str) -> Result<Self> {
         Ok(match status {
             "pending" => Status::Pending,
             "running" => Status::Running,
@@ -306,7 +308,7 @@ impl FromStr for Status {
 }
 
 // impl WebHookListener {
-//     fn handle_mr_hook(&self) -> Result<(), Error> {
+//     fn handle_mr_hook(&self) -> Result<()> {
 //         let branch = "";
 //         let base = "";
 //         let job = CIJob::new(branch, base, &self.config)?;
@@ -314,7 +316,7 @@ impl FromStr for Status {
 //         Ok(())
 //     }
 // 
-//     fn handle_pipeline_hook(&self) -> Result<(), Error> {
+//     fn handle_pipeline_hook(&self) -> Result<()> {
 //         let branch = "";
 //         let base = "";
 //         // TODO: figure out whether for a base branch or a MR
@@ -323,7 +325,7 @@ impl FromStr for Status {
 //         Ok(())
 //     }
 // 
-//     fn handle_push_hook(&self) -> Result<(), Error> {
+//     fn handle_push_hook(&self) -> Result<()> {
 //         let branch = "";
 //         let base = "";
 //         // if branch in base_branches
@@ -445,7 +447,7 @@ fn main() {
         pipeline_name: "release"
     }"#;
     let config: Config = serde_json::from_str(config_string).unwrap();
-    let environment = config.load();
+    let environment = config.load().unwrap();
 
     let job = CIJob::new("other-branch", "master", &environment).unwrap();
     job.ensure_running().unwrap();
