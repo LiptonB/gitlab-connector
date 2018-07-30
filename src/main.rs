@@ -89,8 +89,10 @@ enum ConnectorError {
     NonexistentBranch {
         branch: String,
     },
-    #[fail(display = "response missing expected keys")]
-    MalformedResponse,
+    #[fail(display = "response missing expected keys. response: {}", response)]
+    MalformedResponse {
+        response: String,
+    },
     #[fail(display = "invalid value for Status: {}", status)]
     InvalidStatus {
         status: String,
@@ -214,7 +216,7 @@ impl<'a> CIJob<'a> {
         let resp: Value = resp.json()?;
         match (resp["id"].as_i64(), resp["status"].as_str()) {
             (Some(id), Some(status)) => self.update_statuses(id, status.parse()?),
-            _ => return Err(ConnectorError::MalformedResponse.into()),
+            _ => return Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
         }
 
         Ok(())
@@ -283,7 +285,7 @@ impl<'a> BranchHead<'a> {
                     url: target_url.to_string(),
                 }))
             },
-            _ => Err(ConnectorError::MalformedResponse.into()),
+            _ => Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
         }
     }
 
@@ -440,11 +442,11 @@ impl FromStr for Status {
 
 fn main() {
     let config_string = r#"{
-        pipeline_url: "http://192.168.56.102/api/v4/projects/4",
-        extra_repo_urls: ["http://192.168.56.102/api/v4/projects/5"],
-        watched_branches: ["master"],
-        auth_token: "xQjkvDxxpu-o2ny4YNUo",
-        pipeline_name: "release"
+        "pipeline_url": "http://192.168.56.102/api/v4/projects/4",
+        "extra_repo_urls": ["http://192.168.56.102/api/v4/projects/5"],
+        "watched_branches": ["master"],
+        "auth_token": "xQjkvDxxpu-o2ny4YNUo",
+        "pipeline_name": "gitlab-connector"
     }"#;
     let config: Config = serde_json::from_str(config_string).unwrap();
     let environment = config.load().unwrap();
