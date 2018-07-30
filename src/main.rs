@@ -1,6 +1,7 @@
 extern crate hyper;
 extern crate futures;
 #[macro_use] extern crate serde_json;
+#[macro_use] extern crate serde_derive;
 extern crate reqwest;
 #[macro_use] extern crate failure;
 
@@ -9,6 +10,7 @@ extern crate reqwest;
 // use hyper::rt::{Future, Stream};
 // use hyper::service::service_fn;
 use std::collections::HashSet;
+use std::iter;
 use std::str::FromStr;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -20,7 +22,7 @@ use failure::Error;
 #[derive(Debug)]
 struct CIJob<'a> {
     branch_heads: Vec<BranchHead<'a>>,
-    config: &'a Config,
+    env: &'a Environment,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -34,7 +36,7 @@ struct BranchHead<'a> {
     commit: String,
     branch: String,
     repo_url: &'a str,
-    config: &'a Config,
+    env: &'a Environment,
     head_type: BranchHeadType,
 }
 
@@ -53,13 +55,26 @@ enum Status {
     Canceled,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Config {
     pipeline_url: String,
-    repo_urls: Vec<String>,
+    extra_repo_urls: Vec<String>,
     watched_branches: Vec<String>,
     auth_token: String,
     pipeline_name: String,
+}
+
+#[derive(Debug)]
+struct Environment {
+    config: Config,
+    projects: Vec<Project>,
+}
+
+#[derive(Debug)]
+struct Project {
+    id: u32,
+    api_url: String,
+    is_pipeline_repo: bool,
 }
 
 // struct WebHookListener {
@@ -85,6 +100,7 @@ enum ConnectorError {
 }
 
 impl Config {
+    /*
     pub fn new(pipeline_url: &str, extra_repo_urls: &[&str], watched_branches: &[&str],
         auth_token: &str, pipeline_name: &str) -> Config
     {
@@ -101,27 +117,43 @@ impl Config {
             pipeline_name: pipeline_name.to_string(),
         }
     }
-}
+    */
 
-impl<'a> BranchHead<'a> {
-    fn is_pipeline_repo(&self) -> bool {
-        self.repo_url == self.config.pipeline_url
+    pub fn all_urls<'a>(&'a self) -> Box<Iterator<Item=&'a str> + 'a> {
+        Box::new(
+            self.extra_repo_urls.iter().map(|s| s.as_str())
+                .chain(iter::once(self.pipeline_url.as_str())))
+    }
+
+    pub fn load(self) -> Environment {
+        let mut env = Environment {
+            config: self,
+            projects: Vec::new(),
+        };
+
+        for url in env.config.all_urls() {
+            println!("Url: {}", url);
+        }
+
+        env
     }
 }
 
+
+
 impl<'a> CIJob<'a> {
-    fn new(branch: &str, base: &str, config: &'a Config) -> Result<CIJob<'a>, Error> {
+    fn new(branch: &str, base: &str, env: &'a Environment) -> Result<CIJob<'a>, Error> {
         let mut job = CIJob {
             branch_heads: Vec::new(),
-            config,
+            env,
         };
 
-        for url in &config.repo_urls {
-            let head = BranchHead::new(branch, url, config, BranchHeadType::Active)?;
+        for url in env.config.all_urls() {
+            let head = BranchHead::new(branch, url, env, BranchHeadType::Active)?;
             if let Some(head) = head {
                 job.branch_heads.push(head);
             } else {
-                let head = BranchHead::new(base, url, config, BranchHeadType::Base)?
+                let head = BranchHead::new(base, url, env, BranchHeadType::Base)?
                     .ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
                 job.branch_heads.push(head);
             }
@@ -141,7 +173,7 @@ impl<'a> CIJob<'a> {
             }
 
             // TODO: "default" should probably come from the config
-            match head.get_current_pipeline(&self.config.pipeline_name)? {
+            match head.get_current_pipeline(&self.env.config.pipeline_name)? {
                 None => {
                     needs_start = true;
                 }
@@ -169,10 +201,10 @@ impl<'a> CIJob<'a> {
                 msg: "No branch head for pipeline repo".to_string()})?;
 
         let params = json!({"ref": pipeline_head.branch, "variables": [{"key": "commits", "value": self.format_commits_str()}]});
-        let start_pipeline_url = format!("{base}/pipeline", base=self.config.pipeline_url);
+        let start_pipeline_url = format!("{base}/pipeline", base=self.env.config.pipeline_url);
         let mut resp = reqwest::Client::new()
             .post(&start_pipeline_url)
-            .query(&[("private_token", &self.config.auth_token)]) // replace with header?
+            .query(&[("private_token", &self.env.config.auth_token)]) // replace with header?
             .json(&params)
             .send()?
             .error_for_status()?;
@@ -203,12 +235,12 @@ impl Pipeline {
 }
 
 impl<'a> BranchHead<'a> {
-    fn new(branch: &str, url: &'a str, config: &'a Config, head_type: BranchHeadType)
+    fn new(branch: &str, url: &'a str, env: &'a Environment, head_type: BranchHeadType)
             -> Result<Option<BranchHead<'a>>, Error> {
         let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
         let resp = reqwest::Client::new()
             .get(&branch_url)
-            .query(&[("private_token", &config.auth_token)])
+            .query(&[("private_token", &env.config.auth_token)])
             .send()?;
 
         if resp.status() == StatusCode::NotFound {
@@ -222,7 +254,7 @@ impl<'a> BranchHead<'a> {
                 branch: branch.to_string(),
                 commit: commit.to_string(),
                 repo_url: url,
-                config,
+                env,
                 head_type,
             })),
             None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}.into()),
@@ -234,7 +266,7 @@ impl<'a> BranchHead<'a> {
                           base=self.repo_url, commit=self.commit);
         let resp: Value = reqwest::Client::new()
             .get(&url)
-            .query(&[("name", name), ("private_token", &self.config.auth_token),
+            .query(&[("name", name), ("private_token", &self.env.config.auth_token),
                      ("ref", &self.branch)])
             .send()?
             .json()?;
@@ -251,6 +283,10 @@ impl<'a> BranchHead<'a> {
             },
             _ => Err(ConnectorError::MalformedResponse.into()),
         }
+    }
+
+    fn is_pipeline_repo(&self) -> bool {
+        self.repo_url == self.env.config.pipeline_url
     }
 }
 
@@ -401,13 +437,16 @@ impl FromStr for Status {
 // }
 
 fn main() {
-    let config = Config::new("http://192.168.56.102/api/v4/projects/4",
-                             &vec!["http://192.168.56.102/api/v4/projects/5"],
-                             &vec!["master"],
-                             "xQjkvDxxpu-o2ny4YNUo",
-                             "release");
+    let config_string = r#"{
+        pipeline_url: "http://192.168.56.102/api/v4/projects/4",
+        extra_repo_urls: ["http://192.168.56.102/api/v4/projects/5"],
+        watched_branches: ["master"],
+        auth_token: "xQjkvDxxpu-o2ny4YNUo",
+        pipeline_name: "release"
+    }"#;
+    let config: Config = serde_json::from_str(config_string).unwrap();
+    let environment = config.load();
 
-    let job = CIJob::new("other-branch", "master", &config).unwrap();
-    println!("job: {:?}", job);
+    let job = CIJob::new("other-branch", "master", &environment).unwrap();
     job.ensure_running().unwrap();
 }
