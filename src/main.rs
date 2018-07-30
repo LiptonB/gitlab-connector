@@ -405,7 +405,7 @@ fn main() {
                              &vec!["http://192.168.56.102/api/v4/projects/5"],
                              &vec!["master"],
                              "xQjkvDxxpu-o2ny4YNUo",
-                             "gitlab-connector");
+                             "release");
 
     let job = CIJob::new("other-branch", "master", &config).unwrap();
     println!("job: {:?}", job);
