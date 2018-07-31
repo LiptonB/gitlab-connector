@@ -74,7 +74,7 @@ struct Environment {
 
 #[derive(Debug)]
 struct Project {
-    id: u32,
+    id: u64,
     api_url: String,
     is_pipeline_repo: bool,
 }
@@ -136,7 +136,23 @@ impl Config {
         };
 
         for url in env.config.all_urls() {
-            println!("Url: {}", url);
+            let resp: Value = reqwest::Client::new()
+                .post(&env.config.pipeline_url)
+                .query(&[("private_token", &env.config.auth_token)]) // replace with header?
+                .send()?
+                .error_for_status()?
+                .json()?;
+
+            match resp["id"].as_u64() {
+                Some(id) => {
+                    env.projects.push(Project{
+                        id,
+                        api_url: url.to_string(),
+                        is_pipeline_repo: url == env.config.pipeline_url,
+                    })
+                },
+                _ => return Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
+            }
         }
 
         Ok(env)
@@ -206,15 +222,15 @@ impl<'a> CIJob<'a> {
 
         let params = json!({"ref": pipeline_head.branch, "variables": [{"key": "commits", "value": self.format_commits_str()}]});
         let start_pipeline_url = format!("{base}/pipeline", base=self.env.config.pipeline_url);
-        let mut resp = reqwest::Client::new()
+        let resp: Value = reqwest::Client::new()
             .post(&start_pipeline_url)
             .query(&[("private_token", &self.env.config.auth_token)]) // replace with header?
             .json(&params)
             .send()?
-            .error_for_status()?;
+            .error_for_status()?
+            .json()?;
 
-        let resp: Value = resp.json()?;
-        match (resp["id"].as_i64(), resp["status"].as_str()) {
+        match (resp["id"].as_u64(), resp["status"].as_str()) {
             (Some(id), Some(status)) => self.update_statuses(id, status.parse()?),
             _ => return Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
         }
@@ -227,7 +243,7 @@ impl<'a> CIJob<'a> {
         "".to_string()
     }
 
-    fn update_statuses(&self, pipeline_id: i64, pipeline_status: Status) {
+    fn update_statuses(&self, pipeline_id: u64, pipeline_status: Status) {
 
     }
 }
@@ -250,9 +266,10 @@ impl<'a> BranchHead<'a> {
         if resp.status() == StatusCode::NotFound {
             return Ok(None);
         }
-        let mut resp = resp.error_for_status()?;
+        let resp: Value = resp
+            .error_for_status()?
+            .json()?;
 
-        let resp: Value = resp.json()?;
         match resp["id"].as_str() {
             Some(commit) => Ok(Some(BranchHead {
                 branch: branch.to_string(),
