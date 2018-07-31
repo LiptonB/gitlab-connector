@@ -37,7 +37,7 @@ enum BranchHeadType {
 struct BranchHead<'a> {
     commit: String,
     branch: String,
-    repo_url: &'a str,
+    project: &'a Project,
     env: &'a Environment,
     head_type: BranchHeadType,
 }
@@ -168,12 +168,12 @@ impl<'a> CIJob<'a> {
             env,
         };
 
-        for url in env.config.all_urls() {
-            let head = BranchHead::new(branch, url, env, BranchHeadType::Active)?;
+        for project in &env.projects {
+            let head = BranchHead::new(branch, &project, env, BranchHeadType::Active)?;
             if let Some(head) = head {
                 job.branch_heads.push(head);
             } else {
-                let head = BranchHead::new(base, url, env, BranchHeadType::Base)?
+                let head = BranchHead::new(base, &project, env, BranchHeadType::Base)?
                     .ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
                 job.branch_heads.push(head);
             }
@@ -255,9 +255,9 @@ impl Pipeline {
 }
 
 impl<'a> BranchHead<'a> {
-    fn new(branch: &str, url: &'a str, env: &'a Environment, head_type: BranchHeadType)
+    fn new(branch: &str, project: &'a Project, env: &'a Environment, head_type: BranchHeadType)
             -> Result<Option<BranchHead<'a>>> {
-        let branch_url = format!("{base}/repository/commits/{branch}", base=url, branch=branch);
+        let branch_url = format!("{base}/repository/commits/{branch}", base=project.api_url, branch=branch);
         let resp = reqwest::Client::new()
             .get(&branch_url)
             .query(&[("private_token", &env.config.auth_token)])
@@ -274,7 +274,7 @@ impl<'a> BranchHead<'a> {
             Some(commit) => Ok(Some(BranchHead {
                 branch: branch.to_string(),
                 commit: commit.to_string(),
-                repo_url: url,
+                project,
                 env,
                 head_type,
             })),
@@ -284,7 +284,7 @@ impl<'a> BranchHead<'a> {
 
     fn get_current_pipeline(&self, name: &str) -> Result<Option<Pipeline>> {
         let url = format!("{base}/repository/commits/{commit}/statuses",
-                          base=self.repo_url, commit=self.commit);
+                          base=self.project.api_url, commit=self.commit);
         let resp: Value = reqwest::Client::new()
             .get(&url)
             .query(&[("name", name), ("private_token", &self.env.config.auth_token),
@@ -307,7 +307,7 @@ impl<'a> BranchHead<'a> {
     }
 
     fn is_pipeline_repo(&self) -> bool {
-        self.repo_url == self.env.config.pipeline_url
+        self.project.api_url == self.env.config.pipeline_url
     }
 }
 
