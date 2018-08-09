@@ -23,6 +23,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 struct CIJob<'a> {
+    // These are in the same order as the projects
     branch_heads: Vec<BranchHead<'a>>,
     ctx: &'a Context,
 }
@@ -70,6 +71,7 @@ struct Config {
 struct Context {
     config: Config,
     projects: Vec<Project>,
+    pipeline_repo_idx: usize,
 }
 
 #[derive(Debug)]
@@ -129,36 +131,49 @@ impl Config {
                 .chain(iter::once(self.pipeline_url.as_str())))
     }
 
-    pub fn load(self) -> Result<Context> {
-        let mut ctx = Context {
-            config: self,
-            projects: Vec::new(),
-        };
+}
 
-        for url in ctx.config.all_urls() {
+impl Context {
+    pub fn try_new(conf: Config) -> Result<Context> {
+        let mut projects = Vec::new();
+        let mut pipeline_repo_idx = None;
+        for (idx, url) in conf.all_urls().enumerate() {
             let resp: Value = reqwest::Client::new()
-                .post(&ctx.config.pipeline_url)
-                .query(&[("private_token", &ctx.config.auth_token)]) // replace with header?
+                .post(&conf.pipeline_url)
+                .query(&[("private_token", &conf.auth_token)]) // replace with header?
                 .send()?
                 .error_for_status()?
                 .json()?;
 
             match resp["id"].as_u64() {
                 Some(id) => {
-                    ctx.projects.push(Project{
+                    let is_pipeline_repo = url == conf.pipeline_url;
+                    projects.push(Project{
                         id,
                         api_url: url.to_string(),
-                        is_pipeline_repo: url == ctx.config.pipeline_url,
-                    })
+                        is_pipeline_repo,
+                    });
+                    if is_pipeline_repo {
+                        pipeline_repo_idx = Some(idx);
+                    }
                 },
                 _ => return Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
             }
         }
 
-        Ok(ctx)
+        match pipeline_repo_idx {
+            None => return Err(
+                ConnectorError::InternalError{
+                    msg: "No project was the pipeline repo".to_string()}.into()),
+            Some(pipeline_repo_idx) => Ok(
+                Context {
+                    config: conf,
+                    projects,
+                    pipeline_repo_idx,
+                }),
+        }
     }
 }
-
 
 
 impl<'a> CIJob<'a> {
@@ -214,10 +229,7 @@ impl<'a> CIJob<'a> {
     }
 
     fn start_pipeline(&self) -> Result<()> {
-        let pipeline_head = self.branch_heads
-            .iter().find(|h| h.is_pipeline_repo())
-            .ok_or(ConnectorError::InternalError{
-                msg: "No branch head for pipeline repo".to_string()})?;
+        let pipeline_head = &self.branch_heads[self.ctx.pipeline_repo_idx];
 
         let params = json!({"ref": pipeline_head.branch, "variables": [{"key": "commits", "value": self.format_commits_str()}]});
         let start_pipeline_url = format!("{base}/pipeline", base=self.ctx.config.pipeline_url);
@@ -303,10 +315,6 @@ impl<'a> BranchHead<'a> {
             },
             _ => Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
         }
-    }
-
-    fn is_pipeline_repo(&self) -> bool {
-        self.project.api_url == self.ctx.config.pipeline_url
     }
 }
 
@@ -465,7 +473,7 @@ fn main() {
         "pipeline_name": "gitlab-connector"
     }"#;
     let config: Config = serde_json::from_str(config_string).unwrap();
-    let ctx = config.load().unwrap();
+    let ctx = Context::try_new(config).unwrap();
 
     let job = CIJob::new("other-branch", "master", &ctx).unwrap();
     job.ensure_running().unwrap();
