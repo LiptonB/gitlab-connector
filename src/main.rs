@@ -65,6 +65,14 @@ struct Config {
     watched_branches: Vec<String>,
     auth_token: String,
     pipeline_name: String,
+    clone_method: CloneMethod,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CloneMethod {
+    SSH,
+    HTTP,
 }
 
 #[derive(Debug)]
@@ -79,6 +87,7 @@ struct Project {
     id: u64,
     api_url: String,
     is_pipeline_repo: bool,
+    clone_url: String,
 }
 
 // struct WebHookListener {
@@ -148,10 +157,20 @@ impl Context {
             match resp["id"].as_u64() {
                 Some(id) => {
                     let is_pipeline_repo = url == conf.pipeline_url;
+
+                    let clone_url = match conf.clone_method {
+                        CloneMethod::SSH => &resp["ssh_url_to_string"],
+                        CloneMethod::HTTP => &resp["http_url_to_string"],
+                    };
+                    let clone_url = clone_url.as_str()
+                        .ok_or(ConnectorError::MalformedResponse{response: resp.to_string()})?
+                        .to_string();
+
                     projects.push(Project{
                         id,
                         api_url: url.to_string(),
                         is_pipeline_repo,
+                        clone_url,
                     });
                     if is_pipeline_repo {
                         pipeline_repo_idx = Some(idx);
@@ -166,7 +185,7 @@ impl Context {
                 ConnectorError::InternalError{
                     msg: "No project was the pipeline repo".to_string()}.into()),
             Some(pipeline_repo_idx) => Ok(
-                Context {
+                Context{
                     config: conf,
                     projects,
                     pipeline_repo_idx,
@@ -294,26 +313,30 @@ impl<'a> BranchHead<'a> {
     }
 
     fn get_current_pipeline(&self, name: &str) -> Result<Option<Pipeline>> {
-        let url = format!("{base}/repository/commits/{commit}/statuses",
-                          base=self.project.api_url, commit=self.commit);
-        let resp: Value = reqwest::Client::new()
-            .get(&url)
-            .query(&[("name", name), ("private_token", &self.ctx.config.auth_token),
-                     ("ref", &self.branch)])
-            .send()?
-            .json()?;
+        if !self.project.is_pipeline_repo {
+            let url = format!("{base}/repository/commits/{commit}/statuses",
+                            base=self.project.api_url, commit=self.commit);
+            let resp: Value = reqwest::Client::new()
+                .get(&url)
+                .query(&[("name", name), ("private_token", &self.ctx.config.auth_token),
+                        ("ref", &self.branch)])
+                .send()?
+                .json()?;
 
-        if !resp[0].is_object() {
-            return Ok(None);
-        }
-        match (resp[0]["target_url"].as_str(), resp[0]["status"].as_str()) {
-            (Some(target_url), Some(status)) => {
-                Ok(Some(Pipeline {
-                    status: status.parse()?,
-                    url: target_url.to_string(),
-                }))
-            },
-            _ => Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
+            if !resp[0].is_object() {
+                return Ok(None);
+            }
+            match (resp[0]["target_url"].as_str(), resp[0]["status"].as_str()) {
+                (Some(target_url), Some(status)) => {
+                    Ok(Some(Pipeline {
+                        status: status.parse()?,
+                        url: target_url.to_string(),
+                    }))
+                },
+                _ => Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
+            }
+        } else {
+            Err(ConnectorError::InternalError{msg: "Not implemented".to_string()}.into())
         }
     }
 }
@@ -470,7 +493,8 @@ fn main() {
         "extra_repo_urls": ["http://192.168.56.102/api/v4/projects/5"],
         "watched_branches": ["master"],
         "auth_token": "xQjkvDxxpu-o2ny4YNUo",
-        "pipeline_name": "gitlab-connector"
+        "pipeline_name": "gitlab-connector",
+        "clone_method": "http"
     }"#;
     let config: Config = serde_json::from_str(config_string).unwrap();
     let ctx = Context::try_new(config).unwrap();
