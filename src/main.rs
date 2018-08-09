@@ -24,7 +24,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 struct CIJob<'a> {
     branch_heads: Vec<BranchHead<'a>>,
-    env: &'a Environment,
+    ctx: &'a Context,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -38,7 +38,7 @@ struct BranchHead<'a> {
     commit: String,
     branch: String,
     project: &'a Project,
-    env: &'a Environment,
+    ctx: &'a Context,
     head_type: BranchHeadType,
 }
 
@@ -67,7 +67,7 @@ struct Config {
 }
 
 #[derive(Debug)]
-struct Environment {
+struct Context {
     config: Config,
     projects: Vec<Project>,
 }
@@ -129,51 +129,51 @@ impl Config {
                 .chain(iter::once(self.pipeline_url.as_str())))
     }
 
-    pub fn load(self) -> Result<Environment> {
-        let mut env = Environment {
+    pub fn load(self) -> Result<Context> {
+        let mut ctx = Context {
             config: self,
             projects: Vec::new(),
         };
 
-        for url in env.config.all_urls() {
+        for url in ctx.config.all_urls() {
             let resp: Value = reqwest::Client::new()
-                .post(&env.config.pipeline_url)
-                .query(&[("private_token", &env.config.auth_token)]) // replace with header?
+                .post(&ctx.config.pipeline_url)
+                .query(&[("private_token", &ctx.config.auth_token)]) // replace with header?
                 .send()?
                 .error_for_status()?
                 .json()?;
 
             match resp["id"].as_u64() {
                 Some(id) => {
-                    env.projects.push(Project{
+                    ctx.projects.push(Project{
                         id,
                         api_url: url.to_string(),
-                        is_pipeline_repo: url == env.config.pipeline_url,
+                        is_pipeline_repo: url == ctx.config.pipeline_url,
                     })
                 },
                 _ => return Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
             }
         }
 
-        Ok(env)
+        Ok(ctx)
     }
 }
 
 
 
 impl<'a> CIJob<'a> {
-    fn new(branch: &str, base: &str, env: &'a Environment) -> Result<CIJob<'a>> {
+    fn new(branch: &str, base: &str, ctx: &'a Context) -> Result<CIJob<'a>> {
         let mut job = CIJob {
             branch_heads: Vec::new(),
-            env,
+            ctx,
         };
 
-        for project in &env.projects {
-            let head = BranchHead::new(branch, &project, env, BranchHeadType::Active)?;
+        for project in &ctx.projects {
+            let head = BranchHead::new(branch, &project, ctx, BranchHeadType::Active)?;
             if let Some(head) = head {
                 job.branch_heads.push(head);
             } else {
-                let head = BranchHead::new(base, &project, env, BranchHeadType::Base)?
+                let head = BranchHead::new(base, &project, ctx, BranchHeadType::Base)?
                     .ok_or(ConnectorError::NonexistentBranch{branch: base.to_string()})?;
                 job.branch_heads.push(head);
             }
@@ -192,8 +192,7 @@ impl<'a> CIJob<'a> {
                 continue;
             }
 
-            // TODO: "default" should probably come from the config
-            match head.get_current_pipeline(&self.env.config.pipeline_name)? {
+            match head.get_current_pipeline(&self.ctx.config.pipeline_name)? {
                 None => {
                     needs_start = true;
                 }
@@ -221,10 +220,10 @@ impl<'a> CIJob<'a> {
                 msg: "No branch head for pipeline repo".to_string()})?;
 
         let params = json!({"ref": pipeline_head.branch, "variables": [{"key": "commits", "value": self.format_commits_str()}]});
-        let start_pipeline_url = format!("{base}/pipeline", base=self.env.config.pipeline_url);
+        let start_pipeline_url = format!("{base}/pipeline", base=self.ctx.config.pipeline_url);
         let resp: Value = reqwest::Client::new()
             .post(&start_pipeline_url)
-            .query(&[("private_token", &self.env.config.auth_token)]) // replace with header?
+            .query(&[("private_token", &self.ctx.config.auth_token)]) // replace with header?
             .json(&params)
             .send()?
             .error_for_status()?
@@ -255,12 +254,12 @@ impl Pipeline {
 }
 
 impl<'a> BranchHead<'a> {
-    fn new(branch: &str, project: &'a Project, env: &'a Environment, head_type: BranchHeadType)
+    fn new(branch: &str, project: &'a Project, ctx: &'a Context, head_type: BranchHeadType)
             -> Result<Option<BranchHead<'a>>> {
         let branch_url = format!("{base}/repository/commits/{branch}", base=project.api_url, branch=branch);
         let resp = reqwest::Client::new()
             .get(&branch_url)
-            .query(&[("private_token", &env.config.auth_token)])
+            .query(&[("private_token", &ctx.config.auth_token)])
             .send()?;
 
         if resp.status() == StatusCode::NotFound {
@@ -275,7 +274,7 @@ impl<'a> BranchHead<'a> {
                 branch: branch.to_string(),
                 commit: commit.to_string(),
                 project,
-                env,
+                ctx,
                 head_type,
             })),
             None => Err(ConnectorError::NonexistentBranch{branch: branch.to_string()}.into()),
@@ -287,7 +286,7 @@ impl<'a> BranchHead<'a> {
                           base=self.project.api_url, commit=self.commit);
         let resp: Value = reqwest::Client::new()
             .get(&url)
-            .query(&[("name", name), ("private_token", &self.env.config.auth_token),
+            .query(&[("name", name), ("private_token", &self.ctx.config.auth_token),
                      ("ref", &self.branch)])
             .send()?
             .json()?;
@@ -307,7 +306,7 @@ impl<'a> BranchHead<'a> {
     }
 
     fn is_pipeline_repo(&self) -> bool {
-        self.project.api_url == self.env.config.pipeline_url
+        self.project.api_url == self.ctx.config.pipeline_url
     }
 }
 
@@ -466,8 +465,8 @@ fn main() {
         "pipeline_name": "gitlab-connector"
     }"#;
     let config: Config = serde_json::from_str(config_string).unwrap();
-    let environment = config.load().unwrap();
+    let ctx = config.load().unwrap();
 
-    let job = CIJob::new("other-branch", "master", &environment).unwrap();
+    let job = CIJob::new("other-branch", "master", &ctx).unwrap();
     job.ensure_running().unwrap();
 }
