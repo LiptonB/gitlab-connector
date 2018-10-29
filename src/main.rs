@@ -273,7 +273,7 @@ impl<'a> CIJob<'a> {
         "".to_string()
     }
 
-    fn update_statuses(&self, pipeline_id: u64, pipeline_status: Status) {
+    fn update_statuses(&self, _pipeline_id: u64, _pipeline_status: Status) {
 
     }
 }
