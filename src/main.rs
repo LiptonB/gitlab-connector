@@ -1,9 +1,8 @@
-
-
-#[macro_use] extern crate serde_json;
-#[macro_use] extern crate serde_derive;
+// TODO: more specific macro imports:
+use serde_json::*;
+use serde_derive::*;
+use failure::*;
 use reqwest;
-#[macro_use] extern crate failure;
 
 //use futures::future;
 // use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
