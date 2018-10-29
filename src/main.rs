@@ -1,8 +1,8 @@
-extern crate hyper;
-extern crate futures;
+
+
 #[macro_use] extern crate serde_json;
 #[macro_use] extern crate serde_derive;
-extern crate reqwest;
+use reqwest;
 #[macro_use] extern crate failure;
 
 //use futures::future;
@@ -134,7 +134,7 @@ impl Config {
     }
     */
 
-    pub fn all_urls<'a>(&'a self) -> Box<Iterator<Item=&'a str> + 'a> {
+    pub fn all_urls<'a>(&'a self) -> Box<dyn Iterator<Item=&'a str> + 'a> {
         Box::new(
             self.extra_repo_urls.iter().map(|s| s.as_str())
                 .chain(iter::once(self.pipeline_url.as_str())))
