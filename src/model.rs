@@ -1,13 +1,11 @@
-use serde_json::{json,json_internal};
-use serde_derive::*;
-use failure::*;
-
 use std::collections::HashSet;
 use std::iter;
 use std::str::FromStr;
 use reqwest;
 use reqwest::StatusCode;
-use serde_json::Value;
+use serde_json::{Value,json};
+use serde_derive::{Serialize,Deserialize};
+use failure::{Error,Fail};
 
 type Result<T> = std::result::Result<T, Error>;
 
