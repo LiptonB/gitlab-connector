@@ -1,13 +1,12 @@
 use futures::future;
 use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
-use hyper::body::Payload;
 use hyper::rt::{Future, Stream};
 use serde_json::Value;
 use failure::Error;
 
 use crate::model::CIJob;
 
-type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
+type BoxFut = Box<Future<Item=Response<Body>, Error=Error> + Send>;
 
 
 // struct WebHookListener {
@@ -161,14 +160,14 @@ impl<'a> hyper::service::Service for Service<'a> {
     }
 }
 
-pub fn run_server(ci_job: CIJob) {
+pub fn run_server(ci_job: &mut CIJob) {
     // This is our socket address...
     let addr = ([127, 0, 0, 1], 3000).into();
 
     // A `Service` is needed for every connection, so this
     // creates one of our specialized struct
     let new_svc = || {
-        Service { ci_job: &mut ci_job }
+        Service { ci_job }
     };
 
     let server = Server::bind(&addr)
