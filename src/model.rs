@@ -3,9 +3,9 @@ use std::iter;
 use std::str::FromStr;
 use reqwest;
 use reqwest::StatusCode;
-use serde_json::{Value,json};
-use serde_derive::{Serialize,Deserialize};
-use failure::{Error,Fail};
+use serde_json::{Value, json};
+use serde_derive::{Serialize, Deserialize};
+use failure::{Error, Fail};
 
 type Result<T> = std::result::Result<T, Error>;
 

@@ -14,5 +14,6 @@ fn main() {
     let ctx = model::Context::try_new(config).unwrap();
 
     let job = model::CIJob::new("other-branch", "master", &ctx).unwrap();
+    let server = server::run_server(job);
     job.ensure_running().unwrap();
 }

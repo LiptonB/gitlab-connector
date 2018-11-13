@@ -1,11 +1,13 @@
-// use futures::future;
-// use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
-// use hyper::rt::{Future, Stream};
-// use hyper::service::service_fn;
+use futures::future;
+use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
+use hyper::body::Payload;
+use hyper::rt::{Future, Stream};
+use serde_json::Value;
+use failure::Error;
 
+use crate::model::CIJob;
 
-// Just a simple type alias
-//type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
+type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 
 
 // struct WebHookListener {
@@ -62,6 +64,18 @@
 //     }
 // }
 // 
+fn process_mr_hook(body: &Body) -> BoxFut {
+    let fut = body.concat2()
+        .and_then(|body| {
+            let body = body.to_vec();
+            let hook: Value = serde_json::from_slice(&body)?;
+            Ok(hook)
+        });
+    Box::new(fut)
+}
+
+
+
 // fn webhook(req: Request<Body>) -> BoxFut {
 //     let mut response = Response::new(Body::empty());
 // 
@@ -124,22 +138,43 @@
 // 
 //     Box::new(future::ok(response))
 // }
-// 
-// fn run_server() {
-//     // This is our socket address...
-//     let addr = ([127, 0, 0, 1], 3000).into();
-// 
-//     // A `Service` is needed for every connection, so this
-//     // creates on of our `hello_world` function.
-//     let new_svc = || {
-//         // service_fn_ok converts our function into a `Service`
-//         service_fn(webhook)
-//     };
-// 
-//     let server = Server::bind(&addr)
-//         .serve(new_svc)
-//         .map_err(|e| eprintln!("server error: {}", e));
-// 
-//     // Run this server for... forever!
-//     hyper::rt::run(server);
-// }
+struct Service<'a> {
+    ci_job: &'a mut CIJob<'a>,
+}
+
+impl<'a> hyper::service::Service for Service<'a> {
+    type ReqBody = Body;
+    type ResBody = Body;
+    type Error = Error;
+    type Future = BoxFut;
+
+    fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future {
+        let mut response = Response::new(Body::empty());
+
+        if let Some(hv) = req.headers().get("X-Gitlab-Event") {
+            if hv == "Merge Request Hook" {
+                return process_mr_hook(req.body());
+            }
+        }
+
+        Box::new(future::ok(response))
+    }
+}
+
+pub fn run_server(ci_job: CIJob) {
+    // This is our socket address...
+    let addr = ([127, 0, 0, 1], 3000).into();
+
+    // A `Service` is needed for every connection, so this
+    // creates one of our specialized struct
+    let new_svc = || {
+        Service { ci_job: &mut ci_job }
+    };
+
+    let server = Server::bind(&addr)
+        .serve(new_svc)
+        .map_err(|e| eprintln!("server error: {}", e));
+
+    // Run this server for... forever!
+    hyper::rt::run(server);
+}
