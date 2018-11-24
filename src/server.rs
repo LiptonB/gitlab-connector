@@ -1,13 +1,13 @@
-use futures::future;
+use futures::{future, IntoFuture};
 use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
 use hyper::body::Payload;
 use hyper::rt::{Future, Stream};
 use serde_json::Value;
-use failure::Error;
 
 use crate::model::CIJob;
 
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
+type Result<T> = std::result::Result<T, failure::Error>;
 
 
 // struct WebHookListener {
@@ -64,12 +64,20 @@ type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 //     }
 // }
 // 
+
+fn execute_mr_hook(body: &[u8]) -> Result<()> {
+    let hook: Value = serde_json::from_slice(body)?;
+    Ok(())
+}
+
 fn process_mr_hook(body: &Body) -> BoxFut {
     let fut = body.concat2()
-        .and_then(|body| {
+        .map(|body| {
             let body = body.to_vec();
-            let hook: Value = serde_json::from_slice(&body)?;
-            Ok(hook)
+            match execute_mr_hook(&body) {
+                Ok(_) => Response::new(Body::from("Success")),
+                Err(e) => Response::new(Body::from(e.to_string())),
+            }
         });
     Box::new(fut)
 }
@@ -158,6 +166,16 @@ impl<'a> hyper::service::Service for Service<'a> {
         }
 
         Box::new(future::ok(response))
+    }
+}
+
+impl<'a> IntoFuture for Service<'a> {
+    type Future = future::FutureResult<Self::Item, Self::Error>;
+    type Item = Self;
+    type Error = hyper::Error;
+
+    fn into_future(self) -> Self::Future {
+        future::ok(self)
     }
 }
 
