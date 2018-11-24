@@ -4,7 +4,7 @@ use hyper::body::Payload;
 use hyper::rt::{Future, Stream};
 use serde_json::Value;
 
-use crate::model::CIJob;
+use crate::model::Context;
 
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 type Result<T> = std::result::Result<T, failure::Error>;
@@ -70,7 +70,7 @@ fn execute_mr_hook(body: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn process_mr_hook(body: &Body) -> BoxFut {
+fn process_mr_hook(body: &mut Body) -> BoxFut {
     let fut = body.concat2()
         .map(|body| {
             let body = body.to_vec();
@@ -147,7 +147,7 @@ fn process_mr_hook(body: &Body) -> BoxFut {
 //     Box::new(future::ok(response))
 // }
 struct Service<'a> {
-    ci_job: &'a mut CIJob<'a>,
+	ctx: &'a Context,
 }
 
 impl<'a> hyper::service::Service for Service<'a> {
@@ -161,7 +161,7 @@ impl<'a> hyper::service::Service for Service<'a> {
 
         if let Some(hv) = req.headers().get("X-Gitlab-Event") {
             if hv == "Merge Request Hook" {
-                return process_mr_hook(req.body());
+                return process_mr_hook(req.body_mut());
             }
         }
 
@@ -179,14 +179,14 @@ impl<'a> IntoFuture for Service<'a> {
     }
 }
 
-pub fn run_server(ci_job: CIJob) {
+pub fn run_server(ctx: &'static Context) {
     // This is our socket address...
     let addr = ([127, 0, 0, 1], 3000).into();
 
     // A `Service` is needed for every connection, so this
     // creates one of our specialized struct
-    let new_svc = || {
-        Service { ci_job: &mut ci_job }
+    let new_svc = move || {
+        Service { ctx }
     };
 
     let server = Server::bind(&addr)
