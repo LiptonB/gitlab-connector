@@ -214,6 +214,7 @@ impl<'a> CIJob<'a> {
                 continue;
             }
 
+            // TODO: pretty sure this logic is just wrong
             match head.get_current_pipeline(&self.ctx.config.pipeline_name)? {
                 None => {
                     needs_start = true;
@@ -301,7 +302,30 @@ impl<'a> BranchHead<'a> {
     }
 
     fn get_current_pipeline(&self, name: &str) -> Result<Option<Pipeline>> {
-        if !self.project.is_pipeline_repo {
+        if self.project.is_pipeline_repo {
+            let url = format!("{base}/pipelines",
+                            base=self.project.api_url);
+            let resp: Value = reqwest::Client::new()
+                .get(&url)
+                .query(&[("ref", &self.branch), ("sha", &self.commit),
+                         ("private_token", &self.ctx.config.auth_token)])
+                .send()?
+                .json()?;
+
+            if !resp[0].is_object() {
+                return Ok(None);
+            }
+            // TODO: web_url might not be getting returned
+            match (resp[0]["web_url"].as_str(), resp[0]["status"].as_str()) {
+                (Some(target_url), Some(status)) => {
+                    Ok(Some(Pipeline {
+                        status: status.parse()?,
+                        url: target_url.to_string(),
+                    }))
+                },
+                _ => Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
+            }
+        } else {
             let url = format!("{base}/repository/commits/{commit}/statuses",
                             base=self.project.api_url, commit=self.commit);
             let resp: Value = reqwest::Client::new()
@@ -323,8 +347,6 @@ impl<'a> BranchHead<'a> {
                 },
                 _ => Err(ConnectorError::MalformedResponse{response: resp.to_string()}.into()),
             }
-        } else {
-            Err(ConnectorError::InternalError{msg: "Not implemented".to_string()}.into())
         }
     }
 }
