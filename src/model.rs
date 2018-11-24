@@ -282,7 +282,7 @@ impl<'a> BranchHead<'a> {
             .query(&[("private_token", &ctx.config.auth_token)])
             .send()?;
 
-        if resp.status() == StatusCode::NotFound {
+        if resp.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
         let resp: Value = resp

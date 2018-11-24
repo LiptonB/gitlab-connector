@@ -145,7 +145,7 @@ struct Service<'a> {
 impl<'a> hyper::service::Service for Service<'a> {
     type ReqBody = Body;
     type ResBody = Body;
-    type Error = Error;
+    type Error = hyper::Error;
     type Future = BoxFut;
 
     fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future {
