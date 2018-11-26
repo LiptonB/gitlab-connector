@@ -1,6 +1,7 @@
 use futures::{future, IntoFuture};
 use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
 use hyper::body::Payload;
+use hyper::service::service_fn;
 use hyper::rt::{Future, Stream};
 use serde_json::Value;
 
@@ -70,14 +71,21 @@ fn execute_mr_hook(body: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn process_mr_hook(body: &mut Body) -> BoxFut {
+fn process_mr_hook(body: Body) -> BoxFut {
+    let mut response = Response::new(Body::empty());
+
     let fut = body.concat2()
-        .map(|body| {
+        .map(move |body| {
             let body = body.to_vec();
             match execute_mr_hook(&body) {
-                Ok(_) => Response::new(Body::from("Success")),
-                Err(e) => Response::new(Body::from(e.to_string())),
+                Ok(_) => {
+                    *response.body_mut() = Body::from("Success");
+                }
+                Err(e) => {
+                    *response.body_mut() = Body::from(e.to_string());
+                }
             }
+            response
         });
     Box::new(fut)
 }
@@ -146,47 +154,57 @@ fn process_mr_hook(body: &mut Body) -> BoxFut {
 // 
 //     Box::new(future::ok(response))
 // }
-struct Service<'a> {
-	ctx: &'a Context,
-}
+//struct Service<'a> {
+//       ctx: &'a Context,
+//}
+//
+//impl<'a> hyper::service::Service for Service<'a> {
+//    type ReqBody = Body;
+//    type ResBody = Body;
+//    type Error = hyper::Error;
+//    type Future = BoxFut;
+//
+//    fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future {
+//        let mut response = Response::new(Body::empty());
+//
+//        if let Some(hv) = req.headers().get("X-Gitlab-Event") {
+//            if hv == "Merge Request Hook" {
+//                return process_mr_hook(req.body_mut());
+//            }
+//        }
+//
+//        Box::new(future::ok(response))
+//    }
+//}
+//
+//impl<'a> IntoFuture for Service<'a> {
+//    type Future = future::FutureResult<Self::Item, Self::Error>;
+//    type Item = Self;
+//    type Error = hyper::Error;
+//
+//    fn into_future(self) -> Self::Future {
+//        future::ok(self)
+//    }
+//}
 
-impl<'a> hyper::service::Service for Service<'a> {
-    type ReqBody = Body;
-    type ResBody = Body;
-    type Error = hyper::Error;
-    type Future = BoxFut;
-
-    fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future {
-        let mut response = Response::new(Body::empty());
-
-        if let Some(hv) = req.headers().get("X-Gitlab-Event") {
-            if hv == "Merge Request Hook" {
-                return process_mr_hook(req.body_mut());
-            }
+fn process_request(mut req: Request<Body>) -> BoxFut {
+    if let Some(hv) = req.headers().get("X-Gitlab-Event") {
+        if hv == "Merge Request Hook" {
+            return process_mr_hook(req.into_body());
         }
-
-        Box::new(future::ok(response))
     }
+
+    Box::new(future::ok(Response::new(Body::empty())))
 }
 
-impl<'a> IntoFuture for Service<'a> {
-    type Future = future::FutureResult<Self::Item, Self::Error>;
-    type Item = Self;
-    type Error = hyper::Error;
-
-    fn into_future(self) -> Self::Future {
-        future::ok(self)
-    }
-}
-
-pub fn run_server(ctx: &'static Context) {
+pub fn run_server(ctx: Context) {
     // This is our socket address...
     let addr = ([127, 0, 0, 1], 3000).into();
 
     // A `Service` is needed for every connection, so this
     // creates one of our specialized struct
     let new_svc = move || {
-        Service { ctx }
+        service_fn(process_request)
     };
 
     let server = Server::bind(&addr)
