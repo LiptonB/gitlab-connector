@@ -1,0 +1,131 @@
+Problem I'm currently running into: need to tell the CI job which commit to
+check out for each of the repos. I do want this to be specified because
+otherwise the status could be placed on a commit that isn't actually covered by
+the associated job. However, we currently only have a mapping from API urls to
+commits (which we get by looking at our list of BranchHeads - they have commit
+and URL). We could give the runner this mapping, but then they would need to
+figure out which URL corresponds to which repo (and what if they have to clone
+the repo).
+
+We're going to have a similar problem later when webhooks come in and we need to
+match them up with the correct project.
+
+Should the config include info like the project name and clone URL? Or should we
+pull a bunch of information about the configured projects on startup? Probably
+the latter, so that the info is always up to date. Rather have a config option
+to choose ssh/http than have the user type in the ssh url. So we're going to
+have a Project struct.
+
+
+Statuses:
+We need to add a status for our tool even though the CI job will add its own
+status, because it doesn't have a target_url, and that's the only way we have to
+associate the specific pipeline with the specific status. Well, we try to
+associate it with a status because that's how we track the commit involved in
+that pipeline, but for the pipeline_repo we can just get that from the pipeline
+data. So our options are:
+1. Add a gitlab-connector status to the commits in all of the repos. In the
+pipeline_repo, two statuses will be shown (and in the pipeline itself).
+2. For non-pipeline repos, pull pipeline ID from the latest status. For pipeline
+repos, pull the pipelines associated with that commit. This way we only have the
+one status for each commit and it will look *almost* the same on the
+non-pipeline repos.
+
+So this gets a little ugly. The only field in the status we seem to be able to
+set is the target URL. So that can only reasonably point to the pipeline's
+webpage. Following the above discussion, we want to try to go via the pipeline
+API on the pipeline repo, but that API doesn't seem to return a URL, just an ID.
+So we may have to parse the target URL to match IDs.
+
+Another issue - seem to have lost track of what I'm even trying to do with these
+pipelines we're creating. The high-level goal is to ensure the "CI job" is
+running. The CI job consists of several branch heads, each of which points to a
+specific commit. So the job is locked to a certain commit in each repo. What we
+need to know is whether a pipeline is running that is configured for all of
+those selected commits. Since we can't retrieve that information from the
+pipeline, we're trying to retrieve it from the statuses instead.
+
+That seems like it should be doable. But instead of trying to get one pipeline
+for each repo, it seems more logical that we should look at all
+pipelines/statuses that are linked to the desired commit, for each repo. Then we
+should take the intersection of those pipelines, and if there is one pipeline
+that matches in all repos, then it's running already.
+
+Does this still make sense when we consider that not all of the Branchheads are
+active? That is, some may not have statuses assigned. I think this is actually
+kind of problematic, because if you only do the intersection of the statuses
+from repos that are actually recording status, there is no guarantee that the
+result has the correct commit on the other branches. The base branches could
+have moved on to a different commit, or the selected pipeline(s) could have been
+created from other branches entirely, and since we're going from
+commit->status->pipeline we wouldn't have detected that. So, either we need to
+find somewhere else to store the commits involved in each pipeline, or we need
+to add statuses on all the repos so that we can follow them to fully identify a
+pipeline.
+
+I really want to store all the data in gitlab, I don't want to have to stand up
+another database just to store these linkages. But there's no way to store
+arbitrary info on the pipeline. (well, there is, but you can't get it back out!)
+Maybe we can get the pipeline job logs and print the variables there? Is that
+what a trace file (GET /projects/:id/jobs/:job_id/trace) is? If that works it
+seems like a much more robust solution. We probably also want to have an
+in-memory cache of the commits in a pipeline, so that we don't have to download
+and parse the entire job log over and over again (but that's an optimization, as
+we'd have to parse it on restart anyway). Hm, it's not really an optimization,
+we need to be able to go from set of commits -> pipeline (to see if that
+pipeline exists yet) but this gets us pipeline -> set of commits. We can narrow
+it down by only pulling pipelines that have the right commit in the pipeline
+repo, but still we're parsing multiple logs to find the job we want. Don't want
+to do that more than once per restart of the connector.
+
+We can't assume the connector will never get restarted while jobs are running.
+But how bad would it be if we just forgot the mappings for those pipelines on
+restart? We would get false negatives when checking whether a pipeline for a set
+of commits already exists. So if two events cause us to try and make the same
+pipeline (most likely, creating merge requests on the same branch of two repos)
+and there's a connector restart in between, we would create a duplicate
+pipeline. Does the mapping get used for anything else? When a pipeline finishes,
+we need to update the appropriate commits in all repos with statuses. This could
+be a problem because the restart might have caused us to lose knowledge of the
+commits. And not every job is a duplicate so we might not get another chance to
+set those statuses. So we'd probably have to parse job logs to figure out what
+to update anyway.
+
+Decision: if parsing job logs is possible, do that. Otherwise, I think the
+connector needs its own storage (database? arbitrary storage in gitlab?).
+
+Because I just don't want to add a status to the master branch for every single
+merge request that doesn't involve that repo. It's bad enough that the pipeline
+repo is going to get statuses for every pipeline, even on the base branch.
+Counterpoint: if that's going to happen on the pipeline repo, maybe all repos
+should get statuses for every pipeline. We can still have different status
+names, so its at least slightly possible to figure out the meaning of the
+statuses...
+
+Counter-counterpoint: if we don't like the way the statuses in the pipeline repo
+work out, we could add a separate repo just for the pipelines. Then the real
+repos would only receive statuses on the active branches for each CIJob. But we
+can't make this improvement if we're doing all the mapping in statuses.
+
+Another question: is it ok that if the pipeline repo is a base branch rather
+than an active branch, it will still get a status recorded because of the
+pipeline? That may make it better to have a separately named status for our tool
+(i.e. approach #1). Not to mention the ID vs URL thing.
+
+Concern for later: missed events. What if a pipeline completes while the
+connector is down? Is there any way we can figure out which pipelines were
+running before, so on startup we can scan them for completion? What if a push
+happens while the connector is down? Should we scan existing merge requests on
+startup to make sure they have pipelines running? (Note, this increases the
+badness of forgetting the pipeline->commit mappings, because now they are all
+guaranteed to be restarted if the connector restarts.
+
+TODO:
+- Go back to putting a status on all repos, even the pipeline repo.
+- Write variable values to job log and make sure we can get that out via the
+  API
+- Create a cache mapping commit sets to pipelines
+- Figure out what jobs we need to parse to find out whether the pipeline we want
+  exists or not. We can't reasonably parse all of them, but is there a way to
+  narrow it down? If there isn't, I think we're back to the database option.
+- Implement parsing a job log to update the cache
