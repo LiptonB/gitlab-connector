@@ -4,6 +4,7 @@ use hyper::body::Payload;
 use hyper::service::service_fn;
 use hyper::rt::{Future, Stream};
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::model::Context;
 
@@ -187,7 +188,7 @@ fn process_mr_hook(body: Body) -> BoxFut {
 //    }
 //}
 
-fn process_request(mut req: Request<Body>) -> BoxFut {
+fn process_request(req: Request<Body>, ctx: Arc<Context>) -> BoxFut {
     if let Some(hv) = req.headers().get("X-Gitlab-Event") {
         if hv == "Merge Request Hook" {
             return process_mr_hook(req.into_body());
@@ -201,10 +202,12 @@ pub fn run_server(ctx: Context) {
     // This is our socket address...
     let addr = ([127, 0, 0, 1], 3000).into();
 
+    let ctx = Arc::new(ctx);
     // A `Service` is needed for every connection, so this
     // creates one of our specialized struct
     let new_svc = move || {
-        service_fn(process_request)
+        let ctx = ctx.clone();
+        service_fn(move |req: Request<Body>| process_request(req, ctx.clone()))
     };
 
     let server = Server::bind(&addr)
