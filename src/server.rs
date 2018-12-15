@@ -75,7 +75,8 @@ fn execute_mr_hook(body: &[u8]) -> Result<()> {
 fn process_mr_hook(body: Body) -> BoxFut {
     let mut response = Response::new(Body::empty());
 
-    let fut = body.concat2()
+    let fut = body
+        .concat2()
         .map(move |body| {
             let body = body.to_vec();
             match execute_mr_hook(&body) {
