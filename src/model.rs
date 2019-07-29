@@ -9,6 +9,7 @@ use failure::{Error, Fail};
 
 type Result<T> = std::result::Result<T, Error>;
 
+// An abstraction of a CI job testing multiple projects
 #[derive(Debug)]
 pub struct CIJob<'a> {
     // These are in the same order as the projects
@@ -169,7 +170,7 @@ impl Context {
         }
 
         match pipeline_repo_idx {
-            None => return Err(
+            None => Err(
                 ConnectorError::InternalError{
                     msg: "No project was the pipeline repo".to_string()}.into()),
             Some(pipeline_repo_idx) => Ok(
@@ -204,6 +205,9 @@ impl<'a> CIJob<'a> {
         Ok(job)
     }
 
+    // Ensure that a CI pipeline has been started to test the configured commits. If any other jobs
+    // are running for the same source and destination branches, stop them. When the pipeline
+    // completes, add statuses to the configured commits reflecting the test results.
     pub fn ensure_running(&self) -> Result<()> {
         // Check the BranchHeads for running jobs
         let mut needs_start = false;

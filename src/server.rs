@@ -1,50 +1,16 @@
-use futures::{future, IntoFuture};
-use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
-use hyper::body::Payload;
+use futures::future;
+use hyper::{Body, Request, Response, Server};
 use hyper::service::service_fn;
 use hyper::rt::{Future, Stream};
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::model::Context;
+use crate::model::{Context, CIJob};
 
 type BoxFut = Box<Future<Item=Response<Body>, Error=hyper::Error> + Send>;
 type Result<T> = std::result::Result<T, failure::Error>;
 
 
-// struct WebHookListener {
-//     config: Config,
-// }
-
-
-// impl WebHookListener {
-//     fn handle_mr_hook(&self) -> Result<()> {
-//         let branch = "";
-//         let base = "";
-//         let job = CIJob::new(branch, base, &self.config)?;
-//         job.ensure_running();
-//         Ok(())
-//     }
-// 
-//     fn handle_pipeline_hook(&self) -> Result<()> {
-//         let branch = "";
-//         let base = "";
-//         // TODO: figure out whether for a base branch or a MR
-//         let job = CIJob::new(branch, base, &self.config)?;
-//         job.update_statuses();
-//         Ok(())
-//     }
-// 
-//     fn handle_push_hook(&self) -> Result<()> {
-//         let branch = "";
-//         let base = "";
-//         // if branch in base_branches
-//         // TODO: tell job it's for the base branch, not a MR
-//         let job = CIJob::new(branch, base, &self.config)?;
-//         job.ensure_running();
-//         Ok(())
-//         // end if
-//     }
 // }
 // 
 // fn call_ci(ref_id: &str) {
@@ -67,19 +33,50 @@ type Result<T> = std::result::Result<T, failure::Error>;
 // }
 // 
 
-fn execute_mr_hook(body: &[u8]) -> Result<()> {
+fn execute_mr_hook(body: &[u8], ctx: &Context) -> Result<()> {
     let hook: Value = serde_json::from_slice(body)?;
+    if let (Some(source), Some(target)) = (
+        hook["object_attributes"]["source_branch"].as_str(),
+        hook["object_attributes"]["target_branch"].as_str()
+    ) {
+        let job = CIJob::new(source, target, ctx)?;
+        job.ensure_running()?;
+    }
     Ok(())
 }
 
-fn process_mr_hook(body: Body) -> BoxFut {
+/*
+fn execute_pipeline_hook(body: &[u8], ctx: Arc<Context>) -> Result<()> {
+    let branch = "";
+    let base = "";
+    // TODO: figure out whether for a base branch or a MR
+    let job = CIJob::new(branch, base, &ctx)?;
+    job.update_statuses();
+    Ok(())
+}
+*/
+// 
+//     fn handle_push_hook(&self) -> Result<()> {
+//         let branch = "";
+//         let base = "";
+//         // if branch in base_branches
+//         // TODO: tell job it's for the base branch, not a MR
+//         let job = CIJob::new(branch, base, &self.config)?;
+//         job.ensure_running();
+//         Ok(())
+//         // end if
+//     }
+
+
+// TODO: log instead of returning error, no one will see it
+fn process_mr_hook(body: Body, ctx: Arc<Context>) -> BoxFut {
     let mut response = Response::new(Body::empty());
 
     let fut = body
         .concat2()
         .map(move |body| {
             let body = body.to_vec();
-            match execute_mr_hook(&body) {
+            match execute_mr_hook(&body, &ctx) {
                 Ok(_) => {
                     *response.body_mut() = Body::from("Success");
                 }
@@ -92,107 +89,10 @@ fn process_mr_hook(body: Body) -> BoxFut {
     Box::new(fut)
 }
 
-
-
-// fn webhook(req: Request<Body>) -> BoxFut {
-//     let mut response = Response::new(Body::empty());
-// 
-//     match req.method() {
-//         &Method::POST => {
-//            let future = req
-//                .into_body()
-//                .concat2()
-//                .map(move |json| {
-//                     execute_webhook(&json);
-//                     response
-//                });
-//            return Box::new(future);
-//         },
-//         _ => {
-//             *response.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
-//         },
-//     };
-// 
-//     /*
-//     match (req.method(), req.uri().path()) {
-//         (&Method::GET, "/") => {
-//             *response.body_mut() = Body::from("Try POSTing data to /echo");
-//         },
-//         (&Method::POST, "/echo") => {
-//             *response.body_mut() = req.into_body();
-//         },
-//         (&Method::POST, "/echo/uppercase") => {
-//             // This is actually a new `futures::Stream`...
-//             let mapping = req
-//                 .into_body()
-//                 .map(|chunk| {
-//                     chunk.iter()
-//                         .map(|byte| byte.to_ascii_uppercase())
-//                         .collect::<Vec<u8>>()
-//                 });
-// 
-//             // Use `Body::wrap_stream` to convert it to a `Body`...
-//             *response.body_mut() = Body::wrap_stream(mapping);
-//         },
-//         (&Method::POST, "/echo/reversed") => {
-//             let reversed = req
-//                 .into_body()
-//                 .concat2()
-//                 .map(|chunk| {
-//                     let body = chunk.iter()
-//                         .rev()
-//                         .cloned()
-//                         .collect::<Vec<u8>>();
-//                     *response.body_mut() = Body::from(body);
-//                     response
-//                 });
-//             return Box::new(reversed);
-//         },
-//         _ => {
-//             *response.status_mut() = StatusCode::NOT_FOUND;
-//         },
-//     };
-//     */
-// 
-//     Box::new(future::ok(response))
-// }
-//struct Service<'a> {
-//       ctx: &'a Context,
-//}
-//
-//impl<'a> hyper::service::Service for Service<'a> {
-//    type ReqBody = Body;
-//    type ResBody = Body;
-//    type Error = hyper::Error;
-//    type Future = BoxFut;
-//
-//    fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future {
-//        let mut response = Response::new(Body::empty());
-//
-//        if let Some(hv) = req.headers().get("X-Gitlab-Event") {
-//            if hv == "Merge Request Hook" {
-//                return process_mr_hook(req.body_mut());
-//            }
-//        }
-//
-//        Box::new(future::ok(response))
-//    }
-//}
-//
-//impl<'a> IntoFuture for Service<'a> {
-//    type Future = future::FutureResult<Self::Item, Self::Error>;
-//    type Item = Self;
-//    type Error = hyper::Error;
-//
-//    fn into_future(self) -> Self::Future {
-//        future::ok(self)
-//    }
-//}
-
 fn process_request(req: Request<Body>, ctx: Arc<Context>) -> BoxFut {
     if let Some(hv) = req.headers().get("X-Gitlab-Event") {
         if hv == "Merge Request Hook" {
-            return process_mr_hook(req.into_body());
+            return process_mr_hook(req.into_body(), ctx);
         }
     }
 
